@@ -139,10 +139,11 @@ contract SyncSwapPair is ISyncSwapPair, ERC20WithPermit, ReentrancyGuard {
         _blockTimestampLast = blockTimestampLast;
     }
 
-    function getReservesAndAmplifier() external view override returns (uint112 _reserve0, uint112 _reserve1, uint32 _liquidityAmplifier) {
+    function getReservesAndParameters() external view override returns (uint112 _reserve0, uint112 _reserve1, uint32 _liquidityAmplifier, uint16 _swapFeePoint) {
         _reserve0 = reserve0;
         _reserve1 = reserve1;
         _liquidityAmplifier = liquidityAmplifier;
+        _swapFeePoint = _getSwapFeePoint();
     }
 
     function getReservesSimple() external view override returns (uint112, uint112) {

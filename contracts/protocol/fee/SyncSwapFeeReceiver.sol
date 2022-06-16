@@ -209,7 +209,7 @@ contract SyncSwapFeeReceiver is ISyncSwapFeeReceiver, Ownable, ReentrancyGuard {
         // Swap from path token to dest token
         uint256 pathBalance = IERC20(tokenPath).balanceOf(address(this));
         if (pathBalance != 0) {
-            _swapFor(_factory, tokenPath, tokenDest, pathBalance, maxPriceImpact, ISyncSwapFactory(_factory).swapFeePoint());
+            _swapFor(_factory, tokenPath, tokenDest, pathBalance, maxPriceImpact);
         }
 
         // Compare to see how many dest tokens we received
@@ -255,46 +255,45 @@ contract SyncSwapFeeReceiver is ISyncSwapFeeReceiver, Ownable, ReentrancyGuard {
         }
 
         address tokenBridge = swapBridgeTokenOverrides[tokenIn];
-        uint256 _swapFeePoint = ISyncSwapFactory(_factory).swapFeePoint();
 
         // Swap for `tokenPath` if no bridge, or bridge is `tokenPath`
         if (tokenBridge == address(0) || tokenBridge == tokenPath) {
-            _swapFor(_factory, tokenIn, tokenPath, balance, _maxPriceImpact, _swapFeePoint);
+            _swapFor(_factory, tokenIn, tokenPath, balance, _maxPriceImpact);
             return;
         }
 
         // Swap for `tokenDest` if bridge is `tokenDest`, indicates explicitly direct swap
         if (tokenBridge == tokenDest) {
-            _swapFor(_factory, tokenIn, tokenDest, balance, _maxPriceImpact, _swapFeePoint);
+            _swapFor(_factory, tokenIn, tokenDest, balance, _maxPriceImpact);
             return;
         }
 
         // Two-step swap for bridge, and for `tokenPath`
-        _swapFor(_factory, tokenIn, tokenBridge, balance, _maxPriceImpact, _swapFeePoint);
-        _swapFor(_factory, tokenBridge, tokenPath, IERC20(tokenBridge).balanceOf(address(this)), _maxPriceImpact, _swapFeePoint);
+        _swapFor(_factory, tokenIn, tokenBridge, balance, _maxPriceImpact);
+        _swapFor(_factory, tokenBridge, tokenPath, IERC20(tokenBridge).balanceOf(address(this)), _maxPriceImpact);
     }
 
     // ---------- Swap ----------
 
-    function _getAmountOut(address _factory, address tokenIn, address tokenOut, uint amountIn, uint256 maxPriceImpact, uint256 _swapFeePoint) internal view returns (uint) {
-        (uint256 reserveIn, uint256 reserveOut, uint32 liquidityAmplifier) = SyncSwapLibrary.getReserves(_factory, tokenIn, tokenOut);
+    function _getAmountOut(address _factory, address tokenIn, address tokenOut, uint amountIn, uint256 maxPriceImpact) internal view returns (uint) {
+        (uint256 reserveIn, uint256 reserveOut, uint32 liquidityAmplifier, uint16 swapFee) = SyncSwapLibrary.getReserves(_factory, tokenIn, tokenOut);
         require(reserveIn != 0 && reserveOut != 0, "SyncSwapFeeManager: pair reserve is zero");
         require(
             maxPriceImpact == type(uint256).max || amountIn * PRECISION / (reserveIn * liquidityAmplifier / 10000) <= maxPriceImpact,
             "SyncSwapFeeManager: price impact too high"
         );
 
-        return SyncSwapLibrary.getAmountOut(amountIn, reserveIn * liquidityAmplifier / 10000, reserveOut * liquidityAmplifier / 10000, _swapFeePoint);
+        return SyncSwapLibrary.getAmountOut(amountIn, reserveIn * liquidityAmplifier / 10000, reserveOut * liquidityAmplifier / 10000, swapFee);
     }
 
     /// @dev Swap `tokenIn` in given amount for `tokenOut`
-    function _swapFor(address _factory, address tokenIn, address tokenOut, uint256 amountIn, uint256 maxPriceImpact, uint256 _swapFeePoint) private {
+    function _swapFor(address _factory, address tokenIn, address tokenOut, uint256 amountIn, uint256 maxPriceImpact) private {
         require(amountIn != 0, "SyncSwapFeeManager: swap input amount is zero");
         require(tokenIn != tokenOut, "SyncSwapFeeManager: identical tokens to swap");
 
         // Quote for price
         uint256 _maxPriceImpact = swapPriceImpactOverrides[tokenIn] ? type(uint256).max : maxPriceImpact;
-        uint256 amountOut = _getAmountOut(_factory, tokenIn, tokenOut, amountIn, _maxPriceImpact, _swapFeePoint);
+        uint256 amountOut = _getAmountOut(_factory, tokenIn, tokenOut, amountIn, _maxPriceImpact);
         require(amountOut != 0, "SyncSwapFeeManager: swap output amount is zero");
 
         // Perform swap

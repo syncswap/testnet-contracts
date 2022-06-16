@@ -10,7 +10,7 @@ interface ISyncSwapPair is IUniswapV2Pair {
     function swapFor0(uint amount0Out, address to) external; // support simple swap
     function swapFor1(uint amount1Out, address to) external; // support simple swap
 
-    function getReservesAndAmplifier() external view returns (uint112 reserve0, uint112 reserve1, uint32 liquidityAmplifier);
+    function getReservesAndParameters() external view returns (uint112 reserve0, uint112 reserve1, uint32 liquidityAmplifier, uint16 swapFee);
     function getReservesSimple() external view returns (uint112, uint112);
 
     function swapFeePointOverride() external view returns (uint16);

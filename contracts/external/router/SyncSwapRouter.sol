@@ -252,7 +252,7 @@ contract SyncSwapRouter is ISyncSwapRouter, SyncSwapRouterInternal {
         );
         address outputToken = path[path.length - 1];
         uint balanceBefore = IERC20(outputToken).balanceOf(to);
-        _swapSupportingFeeOnTransferTokens(_factory, path, to, ISyncSwapFactory(_factory).swapFeePoint());
+        _swapSupportingFeeOnTransferTokens(_factory, path, to);
         require(
             IERC20(outputToken).balanceOf(to) - balanceBefore >= amountOutMin,
             'INSUFFICIENT_OUTPUT_AMOUNT'

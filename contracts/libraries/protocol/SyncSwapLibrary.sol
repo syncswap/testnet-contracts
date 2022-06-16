@@ -32,33 +32,35 @@ library SyncSwapLibrary {
     /**
      * @dev Fetches pair with given tokens, returns its reserves in the given order.
      */
-    function getReserves(address factory, address tokenA, address tokenB) internal view returns (uint112 reserveA, uint112 reserveB, uint32 liquidityAmplifier) {
+    function getReserves(address factory, address tokenA, address tokenB) internal view returns (uint112 reserveA, uint112 reserveB, uint32 liquidityAmplifier, uint16 swapFee) {
         address pair = pairFor(factory, tokenA, tokenB);
         if (pair == address(0)) {
-            return (0, 0, 1);
+            return (0, 0, 0, 0);
         }
-        (uint112 reserve0, uint112 reserve1, uint32 _liquidityAmplifier) = ISyncSwapPair(pair).getReservesAndAmplifier();
+        (uint112 reserve0, uint112 reserve1, uint32 _liquidityAmplifier, uint16 _swapFee) = ISyncSwapPair(pair).getReservesAndParameters();
         (reserveA, reserveB) = tokenA < tokenB ? (reserve0, reserve1) : (reserve1, reserve0);
         liquidityAmplifier = _liquidityAmplifier;
+        swapFee = _swapFee;
     }
 
     /**
      * @dev Fetches reserves with given pair in the given order.
      */
-    function getReservesWithPair(address pair, address tokenA, address tokenB) internal view returns (uint112 reserveA, uint112 reserveB, uint32 liquidityAmplifier) {
-        (uint112 reserve0, uint112 reserve1, uint32 _liquidityAmplifier) = ISyncSwapPair(pair).getReservesAndAmplifier();
+    function getReservesWithPair(address pair, address tokenA, address tokenB) internal view returns (uint112 reserveA, uint112 reserveB, uint32 liquidityAmplifier, uint16 swapFee) {
+        (uint112 reserve0, uint112 reserve1, uint32 _liquidityAmplifier, uint16 _swapFee) = ISyncSwapPair(pair).getReservesAndParameters();
         (reserveA, reserveB) = tokenA < tokenB ? (reserve0, reserve1) : (reserve1, reserve0);
         liquidityAmplifier = _liquidityAmplifier;
+        swapFee = _swapFee;
     }
 
     /**
      * @dev Fetches pair with given tokens, returns pair address and its reserves in the given order if exists. 
      */
-    function getPairAndReserves(address factory, address tokenA, address tokenB) internal view returns (address pair, uint112 reserveA, uint112 reserveB, uint32 liquidityAmplifier) {
+    function getPairAndReserves(address factory, address tokenA, address tokenB) internal view returns (address pair, uint112 reserveA, uint112 reserveB, uint32 liquidityAmplifier, uint16 swapFee) {
         pair = pairFor(factory, tokenA, tokenB);
         if (pair != address(0)) { // return empty values if pair not exists
             uint112 reserve0; uint112 reserve1;
-            (reserve0, reserve1, liquidityAmplifier) = ISyncSwapPair(pair).getReservesAndAmplifier();
+            (reserve0, reserve1, liquidityAmplifier, swapFee) = ISyncSwapPair(pair).getReservesAndParameters();
             (reserveA, reserveB) = tokenA < tokenB ? (reserve0, reserve1) : (reserve1, reserve0);
         }
     }
@@ -110,11 +112,9 @@ library SyncSwapLibrary {
         amounts = new uint[](path.length);
         amounts[0] = amountIn;
 
-        uint swapFeePoint = ISyncSwapFactory(factory).swapFeePoint();
-
         for (uint i; i < path.length - 1; ) {
-            (uint reserveIn, uint reserveOut, uint32 liquidityAmplifier) = getReserves(factory, path[i], path[i + 1]);
-            amounts[i + 1] = getAmountOut(amounts[i], reserveIn * liquidityAmplifier / 10000, reserveOut * liquidityAmplifier / 10000, swapFeePoint);
+            (uint reserveIn, uint reserveOut, uint32 liquidityAmplifier, uint16 swapFee) = getReserves(factory, path[i], path[i + 1]);
+            amounts[i + 1] = getAmountOut(amounts[i], reserveIn * liquidityAmplifier / 10000, reserveOut * liquidityAmplifier / 10000, swapFee);
 
             unchecked {
                 ++i;
@@ -137,11 +137,9 @@ library SyncSwapLibrary {
         amounts = new uint[](path.length);
         amounts[amounts.length - 1] = amountOut;
 
-        uint swapFeePoint = ISyncSwapFactory(factory).swapFeePoint();
-
         for (uint i = path.length - 1; i > 0; ) {
-            (uint reserveIn, uint reserveOut, uint32 liquidityAmplifier) = getReserves(factory, path[i - 1], path[i]);
-            amounts[i - 1] = getAmountIn(amounts[i], reserveIn * liquidityAmplifier / 10000, reserveOut * liquidityAmplifier / 10000, swapFeePoint);
+            (uint reserveIn, uint reserveOut, uint32 liquidityAmplifier, uint16 swapFee) = getReserves(factory, path[i - 1], path[i]);
+            amounts[i - 1] = getAmountIn(amounts[i], reserveIn * liquidityAmplifier / 10000, reserveOut * liquidityAmplifier / 10000, swapFee);
 
             unchecked {
                 --i;

@@ -212,7 +212,7 @@ abstract contract SyncSwapRouterInternal {
     //////////////////////////////////////////////////////////////*/
 
     // requires the initial amount to have already been sent to the first pair
-    function _swapSupportingFeeOnTransferTokens(address _factory, address[] calldata path, address _to, uint _swapFeePoint) internal virtual {
+    function _swapSupportingFeeOnTransferTokens(address _factory, address[] calldata path, address _to) internal virtual {
         for (uint i; i < path.length - 1; ) {
             (address input, address output) = (path[i], path[i + 1]);
             
@@ -221,10 +221,10 @@ abstract contract SyncSwapRouterInternal {
             uint amountOutput;
 
             { // scope to avoid stack too deep errors
-                (uint reserve0, uint reserve1, uint32 liquidityAmplifier) = pair.getReservesAndAmplifier();
+                (uint reserve0, uint reserve1, uint32 liquidityAmplifier, uint16 swapFee) = pair.getReservesAndParameters();
                 (uint reserveIn, uint reserveOut) = input < output ? (reserve0, reserve1) : (reserve1, reserve0);
                 amountInput = IERC20(input).balanceOf(address(pair)) - reserveIn;
-                amountOutput = SyncSwapLibrary.getAmountOut(amountInput, reserveIn * liquidityAmplifier / 10000, reserveOut * liquidityAmplifier / 10000, _swapFeePoint);
+                amountOutput = SyncSwapLibrary.getAmountOut(amountInput, reserveIn * liquidityAmplifier / 10000, reserveOut * liquidityAmplifier / 10000, swapFee);
             }
 
             address to = i < path.length - 2 ? SyncSwapLibrary.pairFor(_factory, output, path[i + 2]) : _to;
