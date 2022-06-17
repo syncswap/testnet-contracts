@@ -258,11 +258,11 @@ contract SyncSwapRouter is ISyncSwapRouter, SyncSwapRouterInternal {
     }
 
     function getAmountOut(uint amountIn, uint reserveIn, uint reserveOut) external view override returns (uint amountOut) {
-        return SyncSwapLibrary.getAmountOut(amountIn, reserveIn, reserveOut, ISyncSwapFactory(factory).swapFeePoint());
+        return SyncSwapLibrary.getAmountOut(amountIn, reserveIn, reserveOut, ISyncSwapFactory(factory).swapFee());
     }
 
     function getAmountIn(uint amountOut, uint reserveIn, uint reserveOut) external view override returns (uint amountIn) {
-        return SyncSwapLibrary.getAmountIn(amountOut, reserveIn, reserveOut, ISyncSwapFactory(factory).swapFeePoint());
+        return SyncSwapLibrary.getAmountIn(amountOut, reserveIn, reserveOut, ISyncSwapFactory(factory).swapFee());
     }
 
     function getAmountsOut(uint amountIn, address[] calldata path) external view override returns (uint[] memory amounts) {

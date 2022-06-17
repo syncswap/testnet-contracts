@@ -74,10 +74,10 @@ library SyncSwapLibrary {
     /**
      * @dev Returns the maximum amount of the output asset.
      */
-    function getAmountOut(uint amountIn, uint reserveIn, uint reserveOut, uint swapFeePoint) internal pure returns (uint amountOut) {
+    function getAmountOut(uint amountIn, uint reserveIn, uint reserveOut, uint swapFee) internal pure returns (uint amountOut) {
         require(amountIn > 0, 'INSUFFICIENT_INPUT_AMOUNT');
         require(reserveIn > 0 && reserveOut > 0, 'INSUFFICIENT_LIQUIDITY');
-        uint amountInAfterFee = amountIn * (10000 - swapFeePoint);
+        uint amountInAfterFee = amountIn * (10000 - swapFee);
         uint numerator = amountInAfterFee * reserveOut;
         uint denominator = (reserveIn * 10000) + amountInAfterFee;
         amountOut = numerator / denominator;
@@ -86,11 +86,11 @@ library SyncSwapLibrary {
     /**
      * @dev Returns a required amount of the input asset.
      */
-    function getAmountIn(uint amountOut, uint reserveIn, uint reserveOut, uint swapFeePoint) internal pure returns (uint amountIn) {
+    function getAmountIn(uint amountOut, uint reserveIn, uint reserveOut, uint swapFee) internal pure returns (uint amountIn) {
         require(amountOut > 0, 'INSUFFICIENT_OUTPUT_AMOUNT');
         require(reserveIn > 0 && reserveOut > 0, 'INSUFFICIENT_LIQUIDITY');
         uint numerator = reserveIn * amountOut * 10000;
-        uint denominator = (reserveOut - amountOut) * (10000 - swapFeePoint);
+        uint denominator = (reserveOut - amountOut) * (10000 - swapFee);
         amountIn = (numerator / denominator) + 1;
     }
 

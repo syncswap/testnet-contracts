@@ -9,11 +9,11 @@ interface ISyncSwapFactory is IUniswapV2Factory {
     function isPair(address pair) external view returns (bool);
     function acceptFeeToSetter() external;
 
-    function swapFeePoint() external view returns (uint16);
-    function setSwapFeePoint(uint16 newPoint) external;
+    function swapFee() external view returns (uint16);
+    function setSwapFee(uint16 newFee) external;
 
     function protocolFeeFactor() external view returns (uint8);
     function setProtocolFeeFactor(uint8 newFactor) external;
 
-    function setSwapFeePointOverride(address pair, uint16 swapFeePointOverride) external;
+    function setSwapFeeOverride(address pair, uint16 swapFeeOverride) external;
 }

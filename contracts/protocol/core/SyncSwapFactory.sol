@@ -25,7 +25,7 @@ contract SyncSwapFactory is ISyncSwapFactory {
     mapping(address => bool) public isPair;
 
     /// @dev Total base point for swap fee
-    uint16 public override swapFeePoint = 30; // 0.3%, in 10000 precision
+    uint16 public override swapFee = 30; // 0.3%, in 10000 precision
 
     /// @dev Protocol fee rate on top of swap fee
     uint8 public override protocolFeeFactor = 5; // 1/5, 20%
@@ -70,9 +70,9 @@ contract SyncSwapFactory is ISyncSwapFactory {
     }
 
     /// @dev Sets swap fee base point
-    function setSwapFeePoint(uint16 newPoint) external override onlyFeeToSetter {
-        require(newPoint <= 1000, "Swap fee point is too high"); // 10%
-        swapFeePoint = newPoint;
+    function setSwapFee(uint16 newFee) external override onlyFeeToSetter {
+        require(newFee <= 1000, "Swap fee point is too high"); // 10%
+        swapFee = newFee;
     }
 
     /// @dev Sets protocol fee factor
@@ -93,7 +93,7 @@ contract SyncSwapFactory is ISyncSwapFactory {
     }
 
     /// @dev Sets swap fee point override for a pair
-    function setSwapFeePointOverride(address _pair, uint16 _swapFeePointOverride) external override onlyFeeToSetter {
-        SyncSwapPair(_pair).setSwapFeePointOverride(_swapFeePointOverride);
+    function setSwapFeeOverride(address _pair, uint16 _swapFeeOverride) external override onlyFeeToSetter {
+        SyncSwapPair(_pair).setSwapFeeOverride(_swapFeeOverride);
     }
 }

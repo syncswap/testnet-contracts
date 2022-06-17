@@ -37,7 +37,7 @@ contract SyncSwapPair is ISyncSwapPair, ERC20WithPermit, ReentrancyGuard {
     uint public override kLast; // reserve0 * reserve1, as of immediately after the most recent liquidity event
 
     uint16 private constant SWAP_FEE_INHERIT = type(uint16).max;
-    uint16 public override swapFeePointOverride = SWAP_FEE_INHERIT;
+    uint16 public override swapFeeOverride = SWAP_FEE_INHERIT;
 
     // track account balances, uses single storage slot
     struct Principal {
@@ -69,11 +69,11 @@ contract SyncSwapPair is ISyncSwapPair, ERC20WithPermit, ReentrancyGuard {
         }
     }
 
-    /// @dev called by the factory to set the swapFeePointOverride
-    function setSwapFeePointOverride(uint16 _swapFeePointOverride) external override {
+    /// @dev called by the factory to set the swapFeeOverride
+    function setSwapFeeOverride(uint16 _swapFeeOverride) external override {
         require(msg.sender == factory, 'FORBIDDEN');
-        require(_swapFeePointOverride <= 1000 || _swapFeePointOverride == SWAP_FEE_INHERIT, 'INVALID_FEE');
-        swapFeePointOverride = _swapFeePointOverride;
+        require(_swapFeeOverride <= 1000 || _swapFeeOverride == SWAP_FEE_INHERIT, 'INVALID_FEE');
+        swapFeeOverride = _swapFeeOverride;
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -128,10 +128,10 @@ contract SyncSwapPair is ISyncSwapPair, ERC20WithPermit, ReentrancyGuard {
         _blockTimestampLast = blockTimestampLast;
     }
 
-    function getReservesAndParameters() external view override returns (uint112 _reserve0, uint112 _reserve1, uint16 _swapFeePoint) {
+    function getReservesAndParameters() external view override returns (uint112 _reserve0, uint112 _reserve1, uint16 _swapFee) {
         _reserve0 = reserve0;
         _reserve1 = reserve1;
-        _swapFeePoint = _getSwapFeePoint();
+        _swapFee = _getSwapFee();
     }
 
     function getReservesSimple() external view override returns (uint112, uint112) {
@@ -175,9 +175,9 @@ contract SyncSwapPair is ISyncSwapPair, ERC20WithPermit, ReentrancyGuard {
         );
     }
 
-    function _getSwapFeePoint() private view returns (uint16) {
-        uint16 _swapFeePointOverride = swapFeePointOverride;
-        return _swapFeePointOverride == SWAP_FEE_INHERIT ? ISyncSwapFactory(factory).swapFeePoint() : _swapFeePointOverride;
+    function _getSwapFee() private view returns (uint16) {
+        uint16 _swapFeeOverride = swapFeeOverride;
+        return _swapFeeOverride == SWAP_FEE_INHERIT ? ISyncSwapFactory(factory).swapFee() : _swapFeeOverride;
     }
 
     function _getProtocolFee(uint _totalSupply, uint _rootK2, uint _rootK1, uint8 _protocolFeeFactor) private pure returns (uint) {
@@ -317,9 +317,9 @@ contract SyncSwapPair is ISyncSwapPair, ERC20WithPermit, ReentrancyGuard {
 
         {
         // make sure the K is correct after fee subtracted.
-        uint16 _swapFeePoint = _getSwapFeePoint();
-        uint balance0Adjusted = (balance0After * SWAP_FEE_POINT_PRECISION) - (amount0In * _swapFeePoint);
-        uint balance1Adjusted = (balance1After * SWAP_FEE_POINT_PRECISION) - (amount1In * _swapFeePoint);
+        uint16 _swapFee = _getSwapFee();
+        uint balance0Adjusted = (balance0After * SWAP_FEE_POINT_PRECISION) - (amount0In * _swapFee);
+        uint balance1Adjusted = (balance1After * SWAP_FEE_POINT_PRECISION) - (amount1In * _swapFee);
 
         require(balance0Adjusted * balance1Adjusted >= uint(_reserve0) * _reserve1 * (SWAP_FEE_POINT_PRECISION_SQ), 'K_VIOLATION');
         }
@@ -353,7 +353,7 @@ contract SyncSwapPair is ISyncSwapPair, ERC20WithPermit, ReentrancyGuard {
 
         {
         // make sure the K is correct after fee subtracted.
-        uint balance1Adjusted = (balance1After * SWAP_FEE_POINT_PRECISION) - (amount1In * _getSwapFeePoint());
+        uint balance1Adjusted = (balance1After * SWAP_FEE_POINT_PRECISION) - (amount1In * _getSwapFee());
         require(balance0After * balance1Adjusted >= uint(_reserve0) * _reserve1 * SWAP_FEE_POINT_PRECISION, 'K_VIOLATION');
         }
 
@@ -386,7 +386,7 @@ contract SyncSwapPair is ISyncSwapPair, ERC20WithPermit, ReentrancyGuard {
 
         {
         // make sure the K is correct after fee subtracted.
-        uint balance0Adjusted = (balance0After * SWAP_FEE_POINT_PRECISION) - (amount0In * _getSwapFeePoint());
+        uint balance0Adjusted = (balance0After * SWAP_FEE_POINT_PRECISION) - (amount0In * _getSwapFee());
         require(balance0Adjusted * balance1After >= uint(_reserve0) * _reserve1 * SWAP_FEE_POINT_PRECISION, 'K_VIOLATION');
         }
 

@@ -134,7 +134,7 @@ describe('SyncSwapPair', () => {
             const accounts = await hre.ethers.getSigners();
 
             const factory = Fixtures.use('factory');
-            await factory.setSwapFeePointOverride(pair.address, 25);
+            await factory.setSwapFeeOverride(pair.address, 25);
 
             const [swapAmount, token0Amount, token1Amount, expectedOutputAmount] = swapTestCase;
             await addLiquidity(token0Amount, token1Amount);
@@ -151,7 +151,7 @@ describe('SyncSwapPair', () => {
             const accounts = await hre.ethers.getSigners();
 
             const factory = Fixtures.use('factory');
-            await factory.setSwapFeePoint(25);
+            await factory.setSwapFee(25);
 
             const [swapAmount, token0Amount, token1Amount, expectedOutputAmount] = swapTestCase;
             await addLiquidity(token0Amount, token1Amount);
