@@ -15,4 +15,5 @@ interface ISyncSwapPair is IUniswapV2Pair {
 
     function swapFeeOverride() external view returns (uint16);
     function setSwapFeeOverride(uint16 newSwapFeeOverride) external;
+    function getSwapFee() external view returns (uint16);
 }

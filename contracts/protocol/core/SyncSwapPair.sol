@@ -131,7 +131,7 @@ contract SyncSwapPair is ISyncSwapPair, ERC20WithPermit, ReentrancyGuard {
     function getReservesAndParameters() external view override returns (uint112 _reserve0, uint112 _reserve1, uint16 _swapFee) {
         _reserve0 = reserve0;
         _reserve1 = reserve1;
-        _swapFee = _getSwapFee();
+        _swapFee = getSwapFee();
     }
 
     function getReservesSimple() external view override returns (uint112, uint112) {
@@ -175,7 +175,7 @@ contract SyncSwapPair is ISyncSwapPair, ERC20WithPermit, ReentrancyGuard {
         );
     }
 
-    function _getSwapFee() private view returns (uint16) {
+    function getSwapFee() public view override returns (uint16) {
         uint16 _swapFeeOverride = swapFeeOverride;
         return _swapFeeOverride == SWAP_FEE_INHERIT ? ISyncSwapFactory(factory).swapFee() : _swapFeeOverride;
     }
@@ -317,7 +317,7 @@ contract SyncSwapPair is ISyncSwapPair, ERC20WithPermit, ReentrancyGuard {
 
         {
         // make sure the K is correct after fee subtracted.
-        uint16 _swapFee = _getSwapFee();
+        uint16 _swapFee = getSwapFee();
         uint balance0Adjusted = (balance0After * SWAP_FEE_POINT_PRECISION) - (amount0In * _swapFee);
         uint balance1Adjusted = (balance1After * SWAP_FEE_POINT_PRECISION) - (amount1In * _swapFee);
 
@@ -353,7 +353,7 @@ contract SyncSwapPair is ISyncSwapPair, ERC20WithPermit, ReentrancyGuard {
 
         {
         // make sure the K is correct after fee subtracted.
-        uint balance1Adjusted = (balance1After * SWAP_FEE_POINT_PRECISION) - (amount1In * _getSwapFee());
+        uint balance1Adjusted = (balance1After * SWAP_FEE_POINT_PRECISION) - (amount1In * getSwapFee());
         require(balance0After * balance1Adjusted >= uint(_reserve0) * _reserve1 * SWAP_FEE_POINT_PRECISION, 'K_VIOLATION');
         }
 
@@ -386,7 +386,7 @@ contract SyncSwapPair is ISyncSwapPair, ERC20WithPermit, ReentrancyGuard {
 
         {
         // make sure the K is correct after fee subtracted.
-        uint balance0Adjusted = (balance0After * SWAP_FEE_POINT_PRECISION) - (amount0In * _getSwapFee());
+        uint balance0Adjusted = (balance0After * SWAP_FEE_POINT_PRECISION) - (amount0In * getSwapFee());
         require(balance0Adjusted * balance1After >= uint(_reserve0) * _reserve1 * SWAP_FEE_POINT_PRECISION, 'K_VIOLATION');
         }
 
