@@ -52,16 +52,6 @@ contract SyncSwapRouter is ISyncSwapRouter, SyncSwapRouterInternal {
     }
 
     /*//////////////////////////////////////////////////////////////
-        Farm
-    //////////////////////////////////////////////////////////////*/
-
-    function stakeFarm(address farm, address shareToken, uint256 amount) external {
-        TransferHelper.safeTransferFrom(shareToken, msg.sender, address(this), amount);
-        IERC20(shareToken).approve(farm, amount);
-        SyncSwapFarm(farm).stake(amount, msg.sender);
-    }
-
-    /*//////////////////////////////////////////////////////////////
         PSM
     //////////////////////////////////////////////////////////////*/
 
