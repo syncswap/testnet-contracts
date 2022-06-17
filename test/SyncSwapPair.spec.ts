@@ -163,54 +163,6 @@ describe('SyncSwapPair', () => {
         });
     })
 
-    const swapTestCasesAmplified: BigNumber[][] = [
-        [1, 5, 10, '1955016961782065611'],
-        [1, 10, 5, '493579017198530649'],
-
-        [2, 5, 10, '3835057891295149440'],
-        [2, 10, 5, '977508480891032805'],
-
-        [1, 10, 10, '987158034397061298'],
-        [1, 100, 100, '996006981039903216'],
-        [1, 1000, 1000, '996900609009281774']
-    ].map(a => a.map(n => (typeof n === 'string' ? BigNumber.from(n) : expandTo18Decimals(n))))
-
-    swapTestCasesAmplified.forEach((swapTestCase, i) => {
-        it(`getInputPrice:amplified:${i}`, async () => {
-            const token0 = Fixtures.use('token0');
-            const pair = Fixtures.use('pair');
-            const accounts = await hre.ethers.getSigners();
-
-            const factory = Fixtures.use('factory');
-            await factory.setLiquidityAmplifier(pair.address, 10 * 10000);
-
-            const [swapAmount, token0Amount, token1Amount, expectedOutputAmount] = swapTestCase;
-            await addLiquidity(token0Amount, token1Amount);
-            await token0.transfer(pair.address, swapAmount);
-            await expect(pair.swap(0, expectedOutputAmount.add(1), accounts[0].address, '0x')).to.be.revertedWith(
-                'K_VIOLATION'
-            );
-            await pair.swap(0, expectedOutputAmount, accounts[0].address, '0x');
-        });
-
-        it(`getInputPrice:amplified:single:${i}`, async () => {
-            const token0 = Fixtures.use('token0');
-            const pair = Fixtures.use('pair');
-            const accounts = await hre.ethers.getSigners();
-
-            const factory = Fixtures.use('factory');
-            await factory.setLiquidityAmplifier(pair.address, 10 * 10000);
-
-            const [swapAmount, token0Amount, token1Amount, expectedOutputAmount] = swapTestCase;
-            await addLiquidity(token0Amount, token1Amount);
-            await token0.transfer(pair.address, swapAmount);
-            await expect(pair.swapFor1(expectedOutputAmount.add(1), accounts[0].address)).to.be.revertedWith(
-                'K_VIOLATION'
-            );
-            await pair.swapFor1(expectedOutputAmount, accounts[0].address);
-        });
-    })
-
     const optimisticTestCases: BigNumber[][] = [
         ['997000000000000000', 5, 10, 1], // given amountIn, amountOut = floor(amountIn * .997)
         ['997000000000000000', 10, 5, 1],
@@ -385,7 +337,7 @@ describe('SyncSwapPair', () => {
 
         // Gas cost are higher because of the configurable swap fee point,
         // the gas cost will be 73498 without it.
-        expect(receipt.gasUsed).to.eq(84715) // 73462 for Uniswap V2
+        expect(receipt.gasUsed).to.eq(83298) // 73462 for Uniswap V2
     });
 
     it('swap:single:gas', async () => {
@@ -408,7 +360,7 @@ describe('SyncSwapPair', () => {
 
         const tx = await pair.swapFor0(expectedOutputAmount, accounts[0].address);
         const receipt = await tx.wait()
-        expect(receipt.gasUsed).to.eq(83317)
+        expect(receipt.gasUsed).to.eq(82065)
     });
 
     it('burn', async () => {

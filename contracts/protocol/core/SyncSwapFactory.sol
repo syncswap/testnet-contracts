@@ -96,9 +96,4 @@ contract SyncSwapFactory is ISyncSwapFactory {
     function setSwapFeePointOverride(address _pair, uint16 _swapFeePointOverride) external override onlyFeeToSetter {
         SyncSwapPair(_pair).setSwapFeePointOverride(_swapFeePointOverride);
     }
-
-    /// @dev Sets liquidity amplifier coefficient for a pair
-    function setLiquidityAmplifier(address _pair, uint32 _liquidityAmplifier) external override onlyFeeToSetter {
-        SyncSwapPair(_pair).setLiquidityAmplifier(_liquidityAmplifier);
-    }
 }

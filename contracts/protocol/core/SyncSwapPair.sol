@@ -39,10 +39,6 @@ contract SyncSwapPair is ISyncSwapPair, ERC20WithPermit, ReentrancyGuard {
     uint16 private constant SWAP_FEE_INHERIT = type(uint16).max;
     uint16 public override swapFeePointOverride = SWAP_FEE_INHERIT;
 
-    uint private constant LIQUIDITY_AMPLIFIER_PRECISION = 10000;
-    uint private constant LIQUIDITY_AMPLIFIER_PRECISION_SQ = 10000_0000;
-    uint32 public override liquidityAmplifier = 10000;
-
     // track account balances, uses single storage slot
     struct Principal {
         uint112 principal0;
@@ -78,13 +74,6 @@ contract SyncSwapPair is ISyncSwapPair, ERC20WithPermit, ReentrancyGuard {
         require(msg.sender == factory, 'FORBIDDEN');
         require(_swapFeePointOverride <= 1000 || _swapFeePointOverride == SWAP_FEE_INHERIT, 'INVALID_FEE');
         swapFeePointOverride = _swapFeePointOverride;
-    }
-
-    /// @dev called by the factory to set the liquidityAmplifier
-    function setLiquidityAmplifier(uint32 _liquidityAmplifier) external override {
-        require(msg.sender == factory, 'FORBIDDEN');
-        require(_liquidityAmplifier != 0, 'INVALID_AMPLIFIER');
-        liquidityAmplifier = _liquidityAmplifier;
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -139,10 +128,9 @@ contract SyncSwapPair is ISyncSwapPair, ERC20WithPermit, ReentrancyGuard {
         _blockTimestampLast = blockTimestampLast;
     }
 
-    function getReservesAndParameters() external view override returns (uint112 _reserve0, uint112 _reserve1, uint32 _liquidityAmplifier, uint16 _swapFeePoint) {
+    function getReservesAndParameters() external view override returns (uint112 _reserve0, uint112 _reserve1, uint16 _swapFeePoint) {
         _reserve0 = reserve0;
         _reserve1 = reserve1;
-        _liquidityAmplifier = liquidityAmplifier;
         _swapFeePoint = _getSwapFeePoint();
     }
 
@@ -328,16 +316,12 @@ contract SyncSwapPair is ISyncSwapPair, ERC20WithPermit, ReentrancyGuard {
         require(amount0In != 0 || amount1In != 0, 'NO_INPUT_AMOUNT');
 
         {
-        uint _liquidityAmplifier = liquidityAmplifier;
-        uint balance0AfterAmplified = (_reserve0 * _liquidityAmplifier / LIQUIDITY_AMPLIFIER_PRECISION) - amount0Out + amount0In;
-        uint balance1AfterAmplified = (_reserve1 * _liquidityAmplifier / LIQUIDITY_AMPLIFIER_PRECISION) - amount1Out + amount1In;
-
         // make sure the K is correct after fee subtracted.
         uint16 _swapFeePoint = _getSwapFeePoint();
-        uint balance0Adjusted = (balance0AfterAmplified * SWAP_FEE_POINT_PRECISION) - (amount0In * _swapFeePoint);
-        uint balance1Adjusted = (balance1AfterAmplified * SWAP_FEE_POINT_PRECISION) - (amount1In * _swapFeePoint);
+        uint balance0Adjusted = (balance0After * SWAP_FEE_POINT_PRECISION) - (amount0In * _swapFeePoint);
+        uint balance1Adjusted = (balance1After * SWAP_FEE_POINT_PRECISION) - (amount1In * _swapFeePoint);
 
-        require(balance0Adjusted * balance1Adjusted >= uint(_reserve0) * _reserve1 * (SWAP_FEE_POINT_PRECISION_SQ) * (_liquidityAmplifier ** 2) / LIQUIDITY_AMPLIFIER_PRECISION_SQ, 'K_VIOLATION');
+        require(balance0Adjusted * balance1Adjusted >= uint(_reserve0) * _reserve1 * (SWAP_FEE_POINT_PRECISION_SQ), 'K_VIOLATION');
         }
 
         _update(balance0After, balance1After, _reserve0, _reserve1);
@@ -368,13 +352,9 @@ contract SyncSwapPair is ISyncSwapPair, ERC20WithPermit, ReentrancyGuard {
         require(amount1In != 0, 'NO_INPUT_AMOUNT');
 
         {
-        uint _liquidityAmplifier = liquidityAmplifier;
-        uint balance0AfterAmplified = (_reserve0 * _liquidityAmplifier / LIQUIDITY_AMPLIFIER_PRECISION) - amount0Out;
-        uint balance1AfterAmplified = (_reserve1 * _liquidityAmplifier / LIQUIDITY_AMPLIFIER_PRECISION) + amount1In;
-
         // make sure the K is correct after fee subtracted.
-        uint balance1Adjusted = (balance1AfterAmplified * SWAP_FEE_POINT_PRECISION) - (amount1In * _getSwapFeePoint());
-        require(balance0AfterAmplified * balance1Adjusted >= uint(_reserve0) * _reserve1 * SWAP_FEE_POINT_PRECISION * (_liquidityAmplifier ** 2) / LIQUIDITY_AMPLIFIER_PRECISION_SQ, 'K_VIOLATION');
+        uint balance1Adjusted = (balance1After * SWAP_FEE_POINT_PRECISION) - (amount1In * _getSwapFeePoint());
+        require(balance0After * balance1Adjusted >= uint(_reserve0) * _reserve1 * SWAP_FEE_POINT_PRECISION, 'K_VIOLATION');
         }
 
         _update(balance0After, balance1After, _reserve0, _reserve1);
@@ -405,13 +385,9 @@ contract SyncSwapPair is ISyncSwapPair, ERC20WithPermit, ReentrancyGuard {
         require(amount0In != 0, 'NO_INPUT_AMOUNT');
 
         {
-        uint _liquidityAmplifier = liquidityAmplifier;
-        uint balance0AfterAmplified = (_reserve0 * _liquidityAmplifier / LIQUIDITY_AMPLIFIER_PRECISION) + amount0In;
-        uint balance1AfterAmplified = (_reserve1 * _liquidityAmplifier / LIQUIDITY_AMPLIFIER_PRECISION) - amount1Out;
-
         // make sure the K is correct after fee subtracted.
-        uint balance0Adjusted = (balance0AfterAmplified * SWAP_FEE_POINT_PRECISION) - (amount0In * _getSwapFeePoint());
-        require(balance0Adjusted * balance1AfterAmplified >= uint(_reserve0) * _reserve1 * SWAP_FEE_POINT_PRECISION * (_liquidityAmplifier ** 2) / LIQUIDITY_AMPLIFIER_PRECISION_SQ, 'K_VIOLATION');
+        uint balance0Adjusted = (balance0After * SWAP_FEE_POINT_PRECISION) - (amount0In * _getSwapFeePoint());
+        require(balance0Adjusted * balance1After >= uint(_reserve0) * _reserve1 * SWAP_FEE_POINT_PRECISION, 'K_VIOLATION');
         }
 
         _update(balance0After, balance1After, _reserve0, _reserve1);

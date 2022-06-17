@@ -276,14 +276,14 @@ contract SyncSwapFeeReceiver is ISyncSwapFeeReceiver, Ownable, ReentrancyGuard {
     // ---------- Swap ----------
 
     function _getAmountOut(address _factory, address tokenIn, address tokenOut, uint amountIn, uint256 maxPriceImpact) internal view returns (uint) {
-        (uint256 reserveIn, uint256 reserveOut, uint32 liquidityAmplifier, uint16 swapFee) = SyncSwapLibrary.getReserves(_factory, tokenIn, tokenOut);
+        (uint112 reserveIn, uint112 reserveOut, uint16 swapFee) = SyncSwapLibrary.getReserves(_factory, tokenIn, tokenOut);
         require(reserveIn != 0 && reserveOut != 0, "SyncSwapFeeManager: pair reserve is zero");
         require(
-            maxPriceImpact == type(uint256).max || amountIn * PRECISION / (reserveIn * liquidityAmplifier / 10000) <= maxPriceImpact,
+            maxPriceImpact == type(uint256).max || amountIn * PRECISION / (reserveIn) <= maxPriceImpact,
             "SyncSwapFeeManager: price impact too high"
         );
 
-        return SyncSwapLibrary.getAmountOut(amountIn, reserveIn * liquidityAmplifier / 10000, reserveOut * liquidityAmplifier / 10000, swapFee);
+        return SyncSwapLibrary.getAmountOut(amountIn, reserveIn, reserveOut, swapFee);
     }
 
     /// @dev Swap `tokenIn` in given amount for `tokenOut`

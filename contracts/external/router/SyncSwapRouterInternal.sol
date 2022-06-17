@@ -221,10 +221,10 @@ abstract contract SyncSwapRouterInternal {
             uint amountOutput;
 
             { // scope to avoid stack too deep errors
-                (uint reserve0, uint reserve1, uint32 liquidityAmplifier, uint16 swapFee) = pair.getReservesAndParameters();
+                (uint reserve0, uint reserve1, uint16 swapFee) = pair.getReservesAndParameters();
                 (uint reserveIn, uint reserveOut) = input < output ? (reserve0, reserve1) : (reserve1, reserve0);
                 amountInput = IERC20(input).balanceOf(address(pair)) - reserveIn;
-                amountOutput = SyncSwapLibrary.getAmountOut(amountInput, reserveIn * liquidityAmplifier / 10000, reserveOut * liquidityAmplifier / 10000, swapFee);
+                amountOutput = SyncSwapLibrary.getAmountOut(amountInput, reserveIn, reserveOut, swapFee);
             }
 
             address to = i < path.length - 2 ? SyncSwapLibrary.pairFor(_factory, output, path[i + 2]) : _to;

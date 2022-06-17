@@ -16,5 +16,5 @@ interface ISyncSwapFactory is IUniswapV2Factory {
     function setProtocolFeeFactor(uint8 newFactor) external;
 
     function setSwapFeePointOverride(address pair, uint16 swapFeePointOverride) external;
-    function setLiquidityAmplifier(address pair, uint32 liquidityAmplifier) external;
+    //function setLiquidityAmplifier(address pair, uint32 liquidityAmplifier) external;
 }
