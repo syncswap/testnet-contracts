@@ -37,6 +37,10 @@ export function expandTo18Decimals(n: number): BigNumber {
     return BigNumber.from(n).mul(BigNumber.from(10).pow(18));
 }
 
+export function expandToDecimals(n: number, decimals: number): BigNumber {
+    return BigNumber.from(n).mul(BigNumber.from(10).pow(decimals));
+}
+
 export function getDomainSeparator(name: string, tokenAddress: string) {
     return keccak256(
         defaultAbiCoder.encode(
@@ -96,6 +100,13 @@ export async function deployERC20(
     const token = await ERC20.deploy(name, symbol, decimals, supply);
     await token.deployed();
     return token;
+}
+
+export async function deployContract(artifact: string, constructorArguments?: any[] | undefined): Promise<Contract> {
+    const contractFactory = await hre.ethers.getContractFactory(artifact); 
+    const contract = await contractFactory.deploy();
+    await contract.deployed();
+    return contract;
 }
 
 export async function deployFactory(

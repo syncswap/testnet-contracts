@@ -45,7 +45,7 @@ contract SyncPSM is ISyncPSM, ERC20WithPermit, Ownable, ReentrancyGuard {
      *
      * Note this is under the `FEE_PRECISION` (1e8).
      */
-    uint256 public override swapFeeRate = 1 * 1e4; // 0.01%
+    uint256 public override swapFeeRate = 5 * 1e4; // 0.05%
 
     /**
      * @dev Accrued and unclaimed fee by assets.
@@ -285,6 +285,20 @@ contract SyncPSM is ISyncPSM, ERC20WithPermit, Ownable, ReentrancyGuard {
     //////////////////////////////////////////////////////////////*/
 
     /**
+     * @dev Returns cap for an asset.
+     */
+    function getCap(address _asset) external view returns (uint256) {
+        return assetInfo[_asset].cap;
+    }
+
+    /**
+     * @dev Returns reserve for an asset.
+     */
+    function getReserve(address _asset) external view returns (uint256) {
+        return assetInfo[_asset].reserve;
+    }
+
+    /**
      * @dev Returns length of all minters.
      */
     function mintersLength() external view returns (uint256) {
@@ -358,39 +372,56 @@ contract SyncPSM is ISyncPSM, ERC20WithPermit, Ownable, ReentrancyGuard {
         return listedAssets;
     }
 
+    function _calculateSwapFee(uint256 _amountOutDesired) internal view returns (uint256) {
+        uint256 _swapFeeRate = swapFeeRate;
+        return _swapFeeRate == 0 ? 0 : (_amountOutDesired * _swapFeeRate / FEE_PRECISION);
+    }
+
     /**
-     * @dev Returns withdraw fee for a withdrawal.
+     * @dev Returns fee for a withdrawal.
      */
-    function getWithdrawFee(address _account, address _asset, uint256 _amount) public view override returns (uint256) {
-        uint256 _supplied = userSupplies[_account][_asset];
-        if (_supplied != 0) {
-            if (_supplied >= _amount) {
-                // Consume part of points, no need to charge fees.
+    function getWithdrawFee(address _account, address _assetOut, uint256 _amountOutDesired) public view override returns (uint256) {
+        uint256 _supply = userSupplies[_account][_assetOut];
+        if (_supply != 0) {
+            if (_supply >= _amountOutDesired) {
+                // Consume part of supply and no need to charge fee.
                 return 0;
             } else {
-                // Consume all points and charge remaining fees.
-                return _getSwapFee(_amount - _supplied);
+                // Consume all supply and charge remaining fee.
+                return _calculateSwapFee(_amountOutDesired - _supply);
             }
         } else {
-            // Charge the full fees.
-            return _getSwapFee(_amount);
+            // No supply to consume and charge the full fee.
+            return _calculateSwapFee(_amountOutDesired);
         }
     }
 
     /**
      * @dev Returns expected output amount for a withdrawal.
      */
-    function getWithdrawOut(address _account, address _asset, uint256 _amount) public view override returns (uint256) {
-        return _amount - getWithdrawFee(_account, _asset, _amount);
+    function getWithdrawOut(address _account, address _assetOut, uint256 _amountOutDesired) public view override returns (uint256) {
+        return _amountOutDesired - getWithdrawFee(_account, _assetOut, _amountOutDesired);
+    }
+
+    /**
+     * @dev Returns fee in output asset for a swap.
+     */
+    function getSwapFee(uint256 _amountOut) public view override returns (uint256 fee) {
+        return _calculateSwapFee(_amountOut);
     }
 
     /**
      * @dev Returns expected output amount for a swap.
      */
-    function getSwapOut(address account, address _assetIn, address _assetOut, uint256 _amountIn) external view override returns (uint256 _amountOut) {
-        // Converts amount from input asset to output asset
-        _amountOut = _toOutputAmount(_assetIn, _assetOut, _amountIn);
-        return getWithdrawOut(account, _assetOut, _amountOut);
+    function getSwapOut(address _assetIn, address _assetOut, uint256 _amountIn) external view override returns (uint256) {
+        // Converts amount from input asset to output asset.
+        uint256 amountOut = _toOutputAmount(_assetIn, _assetOut, _amountIn);
+
+        // Applies swap fee.
+        uint256 _fee = getSwapFee(amountOut);
+        amountOut -= _fee;
+
+        return amountOut;
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -512,52 +543,53 @@ contract SyncPSM is ISyncPSM, ERC20WithPermit, Ownable, ReentrancyGuard {
         Withdraw
     //////////////////////////////////////////////////////////////*/
 
-    function _getSwapFee(uint256 _amount) internal view returns (uint256) {
-        uint256 _swapFeeRate = swapFeeRate;
-        if (_swapFeeRate == 0) {
-            return 0;
-        } else {
-            return _amount * _swapFeeRate / FEE_PRECISION;
-        }
-    }
-
-    function _chargeSwapFees(address _asset, uint256 _amount) internal returns (uint256) {
-        uint256 _fee = _getSwapFee(_amount);
+    /**
+     * @dev Accrues and returns the full swap fee.
+     */
+    function _calculateAndAccrueSwapFee(address _assetOut, uint256 _amountOutDesired) internal returns (uint256) {
+        uint256 _fee = _calculateSwapFee(_amountOutDesired);
         if (_fee != 0) {
-            accruedFees[_asset] += _fee;
+            accruedFees[_assetOut] += _fee;
         }
         return _fee;
     }
 
-    function _tryChargeSwapFees(address account, address asset, uint256 assetAmount) internal returns (uint256 fee) {
-        uint256 _supplied = userSupplies[account][asset];
-        if (_supplied != 0) {
-            if (_supplied >= assetAmount) {
-                // Consume part of points, no need to charge fees
-                userSupplies[account][asset] -= assetAmount;
-                fee = 0;
+    /**
+     * @dev Try accures and returns withdraw fee.
+     */
+    function _tryAccrueWithdrawFee(address _account, address _assetOut, uint256 _amountOutDesired) internal returns (uint256 _fee) {
+        uint256 _supply = userSupplies[_account][_assetOut];
+        if (_supply != 0) {
+            if (_supply >= _amountOutDesired) {
+                // Consume part of supply and no need to charge fee.
+                userSupplies[_account][_assetOut] -= _amountOutDesired;
+                _fee = 0;
             } else {
-                // Consume all points and charge remaining fees
-                userSupplies[account][asset] = 0;
-                fee = _chargeSwapFees(asset, assetAmount - _supplied);
+                // Consume all supply and charge remaining fee.
+                userSupplies[_account][_assetOut] = 0;
+                _fee = _calculateAndAccrueSwapFee(_assetOut, _amountOutDesired - _supply);
             }
         } else {
-            // Charge the full fees
-            fee = _chargeSwapFees(asset, assetAmount);
+            // No supply to consume and charge the full fee.
+            _fee = _calculateAndAccrueSwapFee(_assetOut, _amountOutDesired);
         }
     }
 
-    function _withdrawAsset(address asset, uint256 assetAmount) internal returns (uint256 amountOut) {
-        // Decrease asset reserve
-        assetInfo[asset].reserve -= assetAmount;
+    function _withdrawAsset(address _assetOut, uint256 _amountOutDesired, bool _isSwap) internal returns (uint256 _amountOutAfterFee) {
+        // Decreases reserve.
+        assetInfo[_assetOut].reserve -= _amountOutDesired;
 
-        // Charge swap fees (if exists) upon output amount
-        uint256 _fee = _tryChargeSwapFees(msg.sender, asset, assetAmount);
-        amountOut = assetAmount - _fee;
+        // Accrues fee (possible) for output asset.
+        uint256 _fee = (
+            _isSwap ?
+            _calculateAndAccrueSwapFee(_assetOut, _amountOutDesired) : // Full fee for swaps.
+            _tryAccrueWithdrawFee(msg.sender, _assetOut, _amountOutDesired)
+        );
+        _amountOutAfterFee = _amountOutDesired - _fee;
 
-        // Transfer output asset
-        require(amountOut != 0, "INSUFFICIENT_INPUT");
-        TransferHelper.safeTransfer(asset, msg.sender, amountOut);
+        // Transfers output asset.
+        require(_amountOutAfterFee != 0, "INSUFFICIENT_INPUT");
+        TransferHelper.safeTransfer(_assetOut, msg.sender, _amountOutAfterFee);
     }
 
     /**
@@ -576,11 +608,11 @@ contract SyncPSM is ISyncPSM, ERC20WithPermit, Ownable, ReentrancyGuard {
         amountOut = _toAssetAmount(asset, nativeAmount);
 
         // 2-3. Withdraw output asset
-        amountOut = _withdrawAsset(asset, amountOut);
-        
+        amountOut = _withdrawAsset(asset, amountOut, false);
+
         ////////////////////////////////////////////////////////////////
 
-        // 4. Emit withdraw event
+        // 3. Emit withdraw event
         emit Withdraw(msg.sender, asset, nativeAmount, amountOut);
     }
 
@@ -634,25 +666,25 @@ contract SyncPSM is ISyncPSM, ERC20WithPermit, Ownable, ReentrancyGuard {
 
         ////////////////////////////////////////////////////////////////
 
-        // 7. Interaction: Receive input asset
+        // 3. Interaction: Receive input asset
         TransferHelper.safeTransferFrom(assetIn, msg.sender, address(this), amountIn);
 
-        // 7-1. Effects: Increase reserve for input asset
+        // 3-1. Effects: Increase reserve for input asset
         unchecked {
             assetInfo[assetIn].reserve += amountIn;
         }
 
         ////////////////////////////////////////////////////////////////
 
-        // 8. Convert from input amount to output amount
+        // 4. Convert from input amount to output amount
         amountOut = _toOutputAmount(assetIn, assetOut, amountIn);
 
-        // 8-2. Withdraw output asset
-        amountOut = _withdrawAsset(assetOut, amountOut);
+        // 4-2. Withdraw output asset
+        amountOut = _withdrawAsset(assetOut, amountOut, true);
 
         ////////////////////////////////////////////////////////////////
 
-        // 9. Emit swap event
+        // 5. Emit swap event
         emit Swap(msg.sender, assetIn, assetOut, amountIn, amountOut);
     }
 }

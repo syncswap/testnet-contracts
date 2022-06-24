@@ -8,9 +8,10 @@ interface ISyncPSM {
 
     function getWithdrawFee(address account, address asset, uint256 amount) external view returns (uint256);
     function getWithdrawOut(address account, address asset, uint256 amount) external view returns (uint256);
-    function getSwapOut(address account, address assetIn, address assetOut, uint256 amountIn) external view returns (uint256 amountOut);
+    function getSwapFee(uint256 amountOut) external view returns (uint256 fee);
+    function getSwapOut(address assetIn, address assetOut, uint256 amountIn) external view returns (uint256 amountOut);
 
-    function deposit(address asset, uint256 amount) external;
+    function deposit(address asset, uint256 assetAmount) external;
     function withdraw(address asset, uint256 nativeAmount) external returns (uint256 amountOut);
     function swap(address assetIn, address assetOut, uint256 amountIn) external returns (uint256 amountOut);
 }
