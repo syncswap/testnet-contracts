@@ -9,11 +9,9 @@ import { BigNumber, Contract } from 'ethers'
 const hre = require("hardhat");
 chai.use(solidity)
 
-const MINIMUM_LIQUIDITY = BigNumber.from(1000);
+//const DISTRIBUTION_ACCOUNTS = [6, 7, 8];
 
-const DISTRIBUTION_ACCOUNTS = [6, 7, 8];
-
-describe.only('SyncSwapFeeReceiver', () => {
+describe('SyncSwapFeeReceiver', () => {
 
     beforeEach(async () => {
         const account = await getAccount(0);
@@ -296,7 +294,7 @@ describe.only('SyncSwapFeeReceiver', () => {
         await expect(await swapForBalance(8)).to.eq('1910796162851772');
     });
 
-    it('rescueERC20:path:direct', async () => {
+    it('rescueERC20', async () => {
         const pair0 = Fixtures.use('pair0');
         const account = await getAccountAddress(4);
         await Fixtures.use('feeReceiver').rescueERC20(pair0.address, account, 10000);
