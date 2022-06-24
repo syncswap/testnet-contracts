@@ -8,7 +8,7 @@ import { BigNumber } from 'ethers'
 
 chai.use(solidity)
 
-describe.only('SyncPSM', () => {
+describe('SyncPSM', () => {
 
     // Fixtures are shared among tasks in this test.
     before(async () => {
