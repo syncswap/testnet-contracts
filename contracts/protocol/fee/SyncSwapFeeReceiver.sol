@@ -14,76 +14,48 @@ import '../../libraries/token/ERC20/utils/TransferHelper.sol';
 contract SyncSwapFeeReceiver is ISyncSwapFeeReceiver, Ownable, ReentrancyGuard {
     using TransferHelper for address;
 
-    /// @dev Precision for fee rates and bounty rates
+    /// @dev Precision for fee rate.
     uint256 public constant PRECISION = 1e18;
 
-    /// @dev Address of associated factory
+    /// @dev Address of associated factory.
     address public immutable factory;
 
-    // ----- Distribution -----
+    /// @dev Token to swap for (e.g. the protocol token).
+    address public immutable swapFor;
 
     struct Distribution {
         address to;
         uint256 share;
     }
 
-    /// @dev Configurations for protocol fee distribution
+    /// @dev Configurations for protocol fee distribution.
     Distribution[] public distributions;
 
-    // ----- Swap -----
-
-    /// @dev Default price impact tolerance for swap
+    /// @dev Default price impact tolerance for swaps.
     uint256 public swapMaxPriceImpact = 1e17; // 10%
 
-    /// @dev Destination token of swap conversion
-    address public swapDestinationToken;
+    /// @dev Common base token for swap (input<>commonBase<>swapFor).
+    address public swapCommonBase;
 
-    /// @dev Path token to swap as inout<>path<>dest
-    address public swapPathToken;
+    /// @dev Path for swap (overriding `swapCommonBase`).
+    mapping(address => address[]) public swapPathOverrides;
 
-    /// @dev Token to bridge liquidity as input<>bridge<>path<>dest
-    mapping(address => address) public swapBridgeTokenOverrides;
-
-    /// @dev Ignored price impact for tokens
-    mapping(address => bool) public swapPriceImpactOverrides;
-
-    // ----- Executor -----
-
-    /// @dev Bounty rate for executor on top of converted
-    uint256 public executorBountyRate = 1e15; // 0.1%
-
-    /// @dev Allowed executors when restriction is enabled
+    /// @dev Allowed executors when restriction is enabled.
     mapping(address => bool) public allowedExecutors;
 
-    /// @dev Whether conversion execution is restricted
-    bool public executorRestricted = false;
+    /// @dev Whether execution is restricted.
+    bool public executorRestricted = true;
 
-    event Distribute(address indexed executor, uint256 convertedAmount, uint256 bountyAmount);
-
-    constructor(address _factory) Ownable() {
-        require(_factory != address(0), "SyncSwapFeeManager: invalid factory address");
+    constructor(address _factory, address _swapFor) {
+        require(_factory != address(0), "Invalid factory");
+        require(_swapFor != address(0), "Invalid swap for");
         factory = _factory;
+        swapFor = _swapFor;
     }
 
     /*//////////////////////////////////////////////////////////////
-        MANAGEMENT FUNCTIONS
+        VIEW FUNCTIONS
     //////////////////////////////////////////////////////////////*/
-
-    function setDistributions(address[] calldata recipients, uint256[] calldata shares) external onlyOwner {
-        require(recipients.length == shares.length, "SyncSwapFeeManager: inconsistent length");
-        delete distributions;
-
-        uint256 totalShare = 0;
-        for (uint256 i = 0; i < recipients.length; i++) {
-            uint256 share = shares[i];
-            distributions.push(Distribution({
-                to: recipients[i],
-                share: share
-            }));
-            totalShare += share;
-        }
-        require(totalShare == PRECISION, "SyncSwapFeeManager: total share must equal to precision");
-    }
 
     function distributionsLength() external view returns (uint256) {
         return distributions.length;
@@ -93,216 +65,311 @@ contract SyncSwapFeeReceiver is ISyncSwapFeeReceiver, Ownable, ReentrancyGuard {
         return distributions;
     }
 
-    function rescueERC20(address token, address to, uint256 amount) external onlyOwner {
-        token.safeTransfer(to, amount);
-    }
-
-    // ----- Swap -----
-
-    modifier ensureTokenValid(address token) {
-        require(token != address(0), "SyncSwapFeeManager: invalid token address");
-        require(IERC20(token).balanceOf(address(this)) != type(uint).max, "SyncSwapFeeManager: not a token");
-        _;
-    }
-
-    function setSwapMaxPriceImpact(uint256 newMaxImpact) external onlyOwner {
-        require(newMaxImpact <= PRECISION, "SyncSwapFeeManager: invalid price impact tolerance");
-        swapMaxPriceImpact = newMaxImpact;
-    }
-
-    function setSwapPriceImpactOverrideFor(address token, bool shouldOverride) external onlyOwner ensureTokenValid(token) {
-        swapPriceImpactOverrides[token] = shouldOverride;
-    }
-
-    function setSwapDestinationToken(address newDestinationToken) external onlyOwner ensureTokenValid(newDestinationToken) {
-        require(newDestinationToken != swapPathToken, "SyncSwapFeeManager: path and dest cannot be identical");
-        swapDestinationToken = newDestinationToken;
-    }
-
-    function setSwapPathToken(address newPathToken) external onlyOwner ensureTokenValid(newPathToken) {
-        require(newPathToken != swapDestinationToken, "SyncSwapFeeManager: path and dest cannot be identical");
-        swapPathToken = newPathToken;
-    }
-
-    function setSwapBridgeTokenOverrideFor(address token, address bridge) external onlyOwner ensureTokenValid(token) ensureTokenValid(bridge) {
-        require(token != bridge, "SyncSwapFeeManager: identical token");
-        swapBridgeTokenOverrides[token] = bridge;
-    }
-
-    function resetSwapBridgeTokenOverrideFor(address token) external onlyOwner ensureTokenValid(token) {
-        delete swapBridgeTokenOverrides[token];
-    }
-
-    // ----- Executor -----
-
-    function setExecutorBountyRate(uint256 newRate) external onlyOwner {
-        require(newRate <= PRECISION, "SyncSwapFeeManager: invalid bounty rate");
-        executorBountyRate = newRate;
-    }
-
-    function toggleExecutorRestriction() external onlyOwner {
-        executorRestricted = !executorRestricted;
-    }
-
-    function setExecutorAllowance(address account, bool allowed) external onlyOwner {
-        allowedExecutors[account] = allowed;
-    }
-
     /*//////////////////////////////////////////////////////////////
-        IMPLEMENTATION FUNCTIONS
+        ADMIN FUNCTIONS
     //////////////////////////////////////////////////////////////*/
 
-    function convertTokensAndDistribute(address[] calldata tokens0, address[] calldata tokens1) external override nonReentrant returns (uint256 converted, uint256 bounty) {
-        require(tokens0.length == tokens1.length, "SyncSwapFeeManager: inconsistent length");
+    function setDistributions(address[] calldata _recipients, uint256[] calldata _shares) external onlyOwner {
+        require(_recipients.length == _shares.length, "Inconsistent parameters");
 
-        ISyncSwapFactory _factory = ISyncSwapFactory(factory);
-        address[] memory pairs = new address[](tokens0.length);
-        for (uint256 i; i < tokens0.length; i++) {
-            address pair = _factory.getPair(tokens0[i], tokens1[i]);
-            require(pair != address(0), "SyncSwapFeeManager: pair not exists");
-            pairs[i] = pair;
-        }
+        // Delete previous distributions.
+        delete distributions;
 
-        return _convertAndDistribute(pairs);
-    }
+        uint256 _totalShare = 0;
+        for (uint256 i = 0; i < _recipients.length; ) {
+            uint256 _share = _shares[i];
 
-    function convertAndDistribute(address[] calldata pairs) external override nonReentrant returns (uint256 converted, uint256 bounty) {
-        return _convertAndDistribute(pairs);
-    }
+            distributions.push(Distribution({
+                to: _recipients[i],
+                share: _share
+            }));
+            _totalShare += _share;
 
-    function _convertAndDistribute(address[] memory pairs) private returns (uint256 converted, uint256 bounty) {
-        require(pairs.length != 0, "SyncSwapFeeManager: no pair to convert");
-        require(!executorRestricted || allowedExecutors[msg.sender] || msg.sender == owner(), "SyncSwapFeeManager: no perms to convert");
-
-        address _factory = factory;
-        address tokenPath = swapPathToken;
-        require(tokenPath != address(0), "SyncSwapFeeManager: path token not set");
-        address tokenDest = swapDestinationToken;
-        require(tokenDest != address(0), "SyncSwapFeeManager: dest token not set");
-
-        // This MUST be defined here as we can withdraw dest tokens
-        uint256 destBalanceBefore = IERC20(tokenDest).balanceOf(address(this));
-
-        // Withdraw all liquidity
-        for (uint256 i; i < pairs.length; i++) {
-            ISyncSwapPair pair = ISyncSwapPair(pairs[i]);
-            require(ISyncSwapFactory(_factory).isPair(address(pair)), "SyncSwapFeeManager: invalid pair");
-
-            uint256 balance = pair.balanceOf(address(this));
-            if (balance != 0) {
-                pair.transfer(address(pair), balance);
-                pair.burn(address(this));
+            unchecked {
+                ++i;
             }
         }
 
-        uint256 maxPriceImpact = swapMaxPriceImpact;
-
-        // Swap from various tokens to path token
-        for (uint256 i; i < pairs.length; i++) {
-            ISyncSwapPair pair = ISyncSwapPair(pairs[i]);
-            (address token0, address token1) = (pair.token0(), pair.token1());
-
-            _tryConvertToken(_factory, token0, tokenPath, tokenDest, maxPriceImpact);
-            _tryConvertToken(_factory, token1, tokenPath, tokenDest, maxPriceImpact);
-        }
-
-        // Swap from path token to dest token
-        uint256 pathBalance = IERC20(tokenPath).balanceOf(address(this));
-        if (pathBalance != 0) {
-            _swapFor(_factory, tokenPath, tokenDest, pathBalance, maxPriceImpact);
-        }
-
-        // Compare to see how many dest tokens we received
-        converted = IERC20(tokenDest).balanceOf(address(this)) - destBalanceBefore;
-        if (converted == 0) {
-            return (0, 0);
-        }
-
-        // Distribute received dest tokens
-        bounty = converted * executorBountyRate / PRECISION;
-        _distribute(tokenDest, converted - bounty);
-
-        if (bounty != 0) {
-            tokenDest.safeTransfer(msg.sender, bounty);
-        }
-
-        emit Distribute(msg.sender, converted, bounty);
+        require(_totalShare == PRECISION, "Total share must equals to the precision");
     }
 
-    function _distribute(address tokenDest, uint256 amount) private {
-        if (amount != 0) {
-            uint256 len = distributions.length;
-            require(len != 0, "SyncSwapFeeManager: distributions are not set");
+    function rescueERC20(address _token, address _to, uint256 _amount) external onlyOwner {
+        _token.safeTransfer(_to, _amount);
+    }
 
-            for (uint256 i = 0; i < len; i++) {
-                Distribution memory dist = distributions[i];
-                uint256 amountFor = amount * dist.share / PRECISION;
+    function setSwapMaxPriceImpact(uint256 _swapMaxPriceImpact) external onlyOwner {
+        require(_swapMaxPriceImpact <= PRECISION, "Invalid price impact");
+        swapMaxPriceImpact = _swapMaxPriceImpact;
+    }
 
-                if (amountFor != 0) {
-                    tokenDest.safeTransfer(dist.to, amountFor);
+    function setSwapCommonBase(address _swapCommonBase) external onlyOwner {
+        require(_swapCommonBase != address(0), "Invalid token");
+        swapCommonBase = _swapCommonBase;
+    }
+
+    function setSwapPathOverrides(address _token, address[] memory _swapPathOverrides) external onlyOwner {
+        if (_swapPathOverrides.length != 0) {
+            require(_swapPathOverrides[0] == _token && _swapPathOverrides[_swapPathOverrides.length - 1] == swapFor, "Invalid path");
+            for (uint256 i = 0; i < _swapPathOverrides.length; ) {
+                require(_swapPathOverrides[i] != address(0), "Invalid token in path");
+                unchecked {
+                    ++i;
                 }
             }
         }
+        swapPathOverrides[_token] = _swapPathOverrides;
     }
 
-    function _tryConvertToken(address _factory, address tokenIn, address tokenPath, address tokenDest, uint256 _maxPriceImpact) private {
-        if (tokenIn == tokenPath || tokenIn == tokenDest) {
-            return;
-        }
-        uint256 balance = IERC20(tokenIn).balanceOf(address(this));
-        if (balance == 0) {
-            return;
-        }
-
-        address tokenBridge = swapBridgeTokenOverrides[tokenIn];
-
-        // Swap for `tokenPath` if no bridge, or bridge is `tokenPath`
-        if (tokenBridge == address(0) || tokenBridge == tokenPath) {
-            _swapFor(_factory, tokenIn, tokenPath, balance, _maxPriceImpact);
-            return;
-        }
-
-        // Swap for `tokenDest` if bridge is `tokenDest`, indicates explicitly direct swap
-        if (tokenBridge == tokenDest) {
-            _swapFor(_factory, tokenIn, tokenDest, balance, _maxPriceImpact);
-            return;
-        }
-
-        // Two-step swap for bridge, and for `tokenPath`
-        _swapFor(_factory, tokenIn, tokenBridge, balance, _maxPriceImpact);
-        _swapFor(_factory, tokenBridge, tokenPath, IERC20(tokenBridge).balanceOf(address(this)), _maxPriceImpact);
+    function setExecutorRestricted(bool _executorRestricted) external onlyOwner {
+        executorRestricted = _executorRestricted;
     }
 
-    // ---------- Swap ----------
-
-    function _getAmountOut(address _factory, address tokenIn, address tokenOut, uint amountIn, uint256 maxPriceImpact) internal view returns (uint) {
-        (uint112 reserveIn, uint112 reserveOut, uint16 swapFee) = SyncSwapLibrary.getReserves(_factory, tokenIn, tokenOut);
-        require(reserveIn != 0 && reserveOut != 0, "SyncSwapFeeManager: pair reserve is zero");
-        require(
-            maxPriceImpact == type(uint256).max || amountIn * PRECISION / (reserveIn) <= maxPriceImpact,
-            "SyncSwapFeeManager: price impact too high"
-        );
-
-        return SyncSwapLibrary.getAmountOut(amountIn, reserveIn, reserveOut, swapFee);
+    function setExecutorAllowance(address _account, bool _isAllowed) external onlyOwner {
+        allowedExecutors[_account] = _isAllowed;
     }
 
-    /// @dev Swap `tokenIn` in given amount for `tokenOut`
-    function _swapFor(address _factory, address tokenIn, address tokenOut, uint256 amountIn, uint256 maxPriceImpact) private {
-        require(amountIn != 0, "SyncSwapFeeManager: swap input amount is zero");
-        require(tokenIn != tokenOut, "SyncSwapFeeManager: identical tokens to swap");
+    /*//////////////////////////////////////////////////////////////
+        USER FUNCTIONS
+    //////////////////////////////////////////////////////////////*/
 
-        // Quote for price
-        uint256 _maxPriceImpact = swapPriceImpactOverrides[tokenIn] ? type(uint256).max : maxPriceImpact;
-        uint256 amountOut = _getAmountOut(_factory, tokenIn, tokenOut, amountIn, _maxPriceImpact);
-        require(amountOut != 0, "SyncSwapFeeManager: swap output amount is zero");
+    modifier onlyExecutors() {
+        require(!executorRestricted || allowedExecutors[msg.sender] || msg.sender == owner(), "Not executor");
+        _;
+    }
 
-        // Perform swap
-        address pair = ISyncSwapFactory(_factory).getPair(tokenIn, tokenOut);
-        TransferHelper.safeTransfer(tokenIn, pair, amountIn);
-        if (tokenIn < tokenOut) { // whether `tokenIn` is `token0`
-            ISyncSwapPair(pair).swapFor1(amountOut, address(this));
+    function swapAndDistributeWithTokens(address[] calldata _tokens0, address[] calldata _tokens1) external override nonReentrant onlyExecutors returns (uint256) {
+        require(_tokens0.length == _tokens1.length, "Inconsistent token length");
+
+        ISyncSwapFactory _factory = ISyncSwapFactory(factory);
+        address[] memory _pairs = new address[](_tokens0.length);
+
+        for (uint256 i = 0; i < _tokens0.length; ) {
+            address _pair = _factory.getPair(_tokens0[i], _tokens1[i]);
+            require(_pair != address(0), "Pair not exists");
+
+            _pairs[i] = _pair;
+
+            unchecked {
+                ++i;
+            }
+        }
+
+        return _swapAndDistribute(address(_factory), _pairs);
+    }
+
+    function swapAndDistribute(address[] calldata _pairs) external override nonReentrant onlyExecutors returns (uint256) {
+        return _swapAndDistribute(factory, _pairs);
+    }
+
+    function _burnPair(address _factory, address _pairAddress) internal {
+        require(ISyncSwapFactory(_factory).isPair(_pairAddress), "Invalid pair");
+
+        ISyncSwapPair _pair = ISyncSwapPair(_pairAddress);
+        uint256 _pairBalance = _pair.balanceOf(address(this));
+        if (_pairBalance != 0) {
+            _pair.transfer(_pairAddress, _pairBalance);
+            _pair.burn(address(this));
+        }
+    }
+
+    function _burnPairs(address _factory, address[] memory _pairAddresses) internal {
+        for (uint256 i = 0; i < _pairAddresses.length; ) {
+            _burnPair(_factory, _pairAddresses[i]);
+
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    function _swapAndDistribute(address _factory, address[] memory _pairs) internal returns (uint256 amountOut) {
+        require(_pairs.length != 0, "No pair to swap");
+
+        address _swapCommonBase = swapCommonBase;
+        require(_swapCommonBase != address(0), "No swap common base");
+
+        address _swapFor = swapFor;
+        require(_swapFor != address(0), "No swap for");
+
+        // This MUST be defined here as we can withdraw `swapFor` tokens.
+        uint256 _swapForBalanceBefore = IERC20(_swapFor).balanceOf(address(this));
+
+        // Burn all pairs to withdraw pool tokens.
+        _burnPairs(_factory, _pairs);
+
+        // Swap from pool tokens to common base (default) or `swapFor` (with path overrides).
+        uint256 _maxPriceImpact = swapMaxPriceImpact;
+    
+        for (uint256 i = 0; i < _pairs.length; ) {
+            ISyncSwapPair _pair = ISyncSwapPair(_pairs[i]);
+            (address _token0, address _token1) = (_pair.token0(), _pair.token1());
+
+            _trySwapPoolToken(_factory, _token0, _swapCommonBase, _swapFor, _maxPriceImpact, address(this));
+            _trySwapPoolToken(_factory, _token1, _swapCommonBase, _swapFor, _maxPriceImpact, address(this));
+
+            unchecked {
+                ++i;
+            }
+        }
+
+        // Swap from common base to `swapFor`.
+        uint256 _commonBaseBalance =  IERC20(_swapCommonBase).balanceOf(address(this));
+        if (_commonBaseBalance != 0) {
+            _trySwapDirect(_factory, _swapCommonBase, _swapFor, _commonBaseBalance, _maxPriceImpact, address(this));
+        }
+
+        // Send tokens to recipients.
+        amountOut = IERC20(_swapFor).balanceOf(address(this)) - _swapForBalanceBefore;
+        if (amountOut != 0) {
+            _distribute(_swapFor, amountOut);
+        }
+
+        return amountOut;
+    }
+
+    /**
+     * @dev Distribute given amount of the token to recipients.
+     */
+    function _distribute(address _token, uint256 _amount) internal {
+        uint256 _length = distributions.length;
+        require(_length != 0, "No distribution");
+
+        for (uint256 i = 0; i < _length; ) {
+            Distribution memory _distribution = distributions[i];
+            uint256 _amountFor = _amount * _distribution.share / PRECISION;
+
+            if (_amountFor != 0) {
+                _token.safeTransfer(_distribution.to, _amountFor);
+            }
+
+            unchecked {
+                ++i;
+            }
+        }
+
+        emit Distribute(_amount);
+    }
+
+    function _trySwapPoolToken(address _factory, address _token, address _swapCommonBase, address _swapFor, uint256 _maxPriceImpact, address _to) internal {
+        // Skips when unnecessary.
+        if (_token == _swapCommonBase || _token == _swapFor) {
+            return;
+        }
+
+        // Skips if no balance to swap.
+        uint256 _balance = IERC20(_token).balanceOf(address(this));
+        if (_balance == 0) {
+            return;
+        }
+
+        // Skips if token is a pair.
+        if (ISyncSwapFactory(_factory).isPair(_token)) {
+            return;
+        }
+
+        address[] memory _swapPathOverrides = swapPathOverrides[_token];
+        if (_swapPathOverrides.length == 0) {
+            // No path overrides, swap to common base
+            _trySwapDirect(_factory, _token, _swapCommonBase, _balance, _maxPriceImpact, _to);
         } else {
-            ISyncSwapPair(pair).swapFor0(amountOut, address(this));
+            // Use path overrides
+            _swapExactTokensForTokens(_factory, _balance, _swapPathOverrides, _maxPriceImpact, _to);
+        }
+    }
+
+    function _trySwapDirect(address _factory, address _tokenIn, address _tokenOut, uint256 _amountIn, uint256 _maxPriceImpact, address _to) internal {
+        if (_amountIn == 0 || _tokenIn == _tokenOut) {
+            return;
+        }
+
+        uint256 _amountOut = _getAmountOut(_factory, _tokenIn, _tokenOut, _amountIn, _maxPriceImpact);
+        if (_amountOut == 0) {
+            return;
+        }
+
+        address _pair = ISyncSwapFactory(_factory).getPair(_tokenIn, _tokenOut);
+        if (_pair == address(0)) {
+            return;
+        }
+
+        _tokenIn.safeTransfer(_pair, _amountIn);
+        _invokeSwap(_pair, _amountOut, _tokenIn, _tokenOut, _to);
+    }
+
+    // Belows are copied from router and modified to support chained swaps with price impact limits.
+    function _getAmountOut(address _factory, address _tokenIn, address _tokenOut, uint _amountIn, uint256 _maxPriceImpact) internal view returns (uint256) {
+        (uint112 _reserveIn, uint112 _reserveOut, uint16 _swapFee) = SyncSwapLibrary.getReserves(_factory, _tokenIn, _tokenOut);
+        if (_reserveIn == 0) {
+            return 0;
+        }
+
+        bool _canSwap = _maxPriceImpact == type(uint256).max || (_amountIn * PRECISION / _reserveIn) <= _maxPriceImpact;
+        if (!_canSwap) {
+            return 0;
+        }
+
+        return SyncSwapLibrary.getAmountOut(_amountIn, _reserveIn, _reserveOut, _swapFee);
+    }
+
+    function _getAmountsOutUnchecked(address _factory, uint _amountIn, address[] memory _path, uint256 _maxPriceImpact) internal view returns (uint256[] memory _amounts) {
+        _amounts = new uint256[](_path.length);
+        _amounts[0] = _amountIn;
+
+        for (uint i; i < _path.length - 1; ) {
+            uint256 _amount = _getAmountOut(_factory, _path[i], _path[i + 1], _amountIn, _maxPriceImpact);
+            if (_amount == 0) {
+                // Invalidate whole path if any of amounts is zero.
+                return new uint256[](0);
+            }
+
+            _amounts[i + 1] = _amount;
+
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    function _swapExactTokensForTokens(address _factory, uint256 _amountIn, address[] memory _path, uint256 _maxPriceImpact, address _to) internal {
+        uint256[] memory _amounts = _getAmountsOutUnchecked(_factory, _amountIn, _path, _maxPriceImpact);
+        if (_amounts.length == 0) {
+            // Path is invalid as one of amounts is zero.
+            return;
+        }
+
+        address _initialPair = SyncSwapLibrary.pairFor(_factory, _path[0], _path[1]);
+        _path[0].safeTransfer(_initialPair, _amounts[0]);
+
+        _swapCached(_factory, _initialPair, _amounts, _path, _to);
+    }
+
+    function _swapCached(address _factory, address _initialPair, uint[] memory _amounts, address[] memory _path, address _to) internal {
+        address _nextPair = _initialPair;
+
+        for (uint256 i = 0; i < _path.length - 1; ) {
+            address _input = _path[i];
+            address _output = _path[i + 1];
+            uint256 _amountOut = _amounts[i + 1];
+
+            if (i < _path.length - 2) {
+                address _pair = _nextPair;
+                _nextPair = SyncSwapLibrary.pairFor(_factory, _output, _path[i + 2]);
+                _invokeSwap(_pair, _amountOut, _input, _output, _nextPair);
+            } else {
+                _invokeSwap(_nextPair, _amountOut, _input, _output, _to);
+            }
+
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    function _invokeSwap(address _pair, uint _amountOut, address _tokenIn, address _tokenOut, address _to) internal {
+        if (_tokenIn < _tokenOut) {
+            ISyncSwapPair(_pair).swapFor1(_amountOut, _to);
+        } else {
+            ISyncSwapPair(_pair).swapFor0(_amountOut, _to);
         }
     }
 }

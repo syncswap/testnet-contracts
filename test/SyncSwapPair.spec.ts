@@ -24,7 +24,7 @@ describe('SyncSwapPair', () => {
         const accounts = await hre.ethers.getSigners();
         const factory = Fixtures.set('factory', await deployFactory(accounts[0].address));
 
-        const feeReceiver = Fixtures.set('feeReceiver', await deployFeeReceiver(factory.address));
+        const feeReceiver = Fixtures.set('feeReceiver', await deployFeeReceiver(factory.address, tokenA.address));
         await factory.setFeeTo(feeReceiver.address);
 
         Fixtures.set('pair', await createPair(factory, token0.address, token1.address));

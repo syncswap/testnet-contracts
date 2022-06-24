@@ -1,3 +1,4 @@
+import { Account } from 'ethereumjs-util';
 import { BigNumber, Contract } from 'ethers';
 import {
     defaultAbiCoder,
@@ -107,10 +108,11 @@ export async function deployFactory(
 }
 
 export async function deployFeeReceiver(
-    factory: string
+    factory: string,
+    swapFor: string
 ): Promise<Contract> {
     const FeeReceiver = await hre.ethers.getContractFactory('SyncSwapFeeReceiver');
-    const feeReceiver = await FeeReceiver.deploy(factory);
+    const feeReceiver = await FeeReceiver.deploy(factory, swapFor);
     await feeReceiver.deployed();
     return feeReceiver;
 }
@@ -144,4 +146,12 @@ export async function mineBlock(): Promise<void> {
 
 export async function mineBlockAfter(seconds: number): Promise<void> {
     await setTimeout(await hre.network.provider.send("hardhat_mine"), seconds * 1000);
+}
+
+export async function getAccounts(): Promise<any[]> {
+    return await hre.ethers.getSigners();
+}
+
+export async function getAccount(id: number): Promise<any> {
+    return (await getAccounts())[id];
 }
