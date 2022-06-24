@@ -3,6 +3,13 @@
 pragma solidity ^0.8.0;
 
 interface IPSMVerifier {
-    function verifyDeposit(address asset, uint256 assetAmount) external view returns (bool);
-    function verifySwap(address assetIn, address assetOut, uint256 amountIn) external view returns (bool);
+    /**
+     * @dev Returns whether a deposit is allowed.
+     */
+    function verifyDeposit(address caller, address asset, uint256 assetAmount) external view returns (bool);
+
+    /**
+     * @dev Returns whether a swap is allowed.
+     */
+    function verifySwap(address caller, address assetIn, address assetOut, uint256 amountIn) external view returns (bool);
 }

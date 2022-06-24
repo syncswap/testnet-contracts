@@ -14,282 +14,465 @@ import "../../libraries/token/ERC20/utils/TransferHelper.sol";
 
 contract SyncPSM is ISyncPSM, ERC20WithPermit, Ownable, ReentrancyGuard {
 
+    /**
+     * @dev The precision for swap fee rate.
+     */
     uint256 public override FEE_PRECISION = 1e8;
 
-    struct Profile {
+    struct AssetInfo {
+        bool exists;
         uint256 cap;
         uint256 reserve;
     }
 
-    /// @dev Deposit cap and reserve for assets
-    mapping (address => Profile) public assetProfiles;
+    /**
+     * @dev Deposit cap and reserve by listed assets.
+     */
+    mapping (address => AssetInfo) public assetInfo;
 
-    /// @dev Assets that has a cap
+    /**
+     * @dev All listed assets.
+     */
     address[] public listedAssets;
 
-    /// @dev User supplied assets, account => asset => amount
-    mapping(address => mapping (address => uint256)) public userSupplies;
+    /**
+     * @dev Supplied asset by users and can be consumed on withdrawal and swap.
+     */
+    mapping(address => mapping (address => uint256)) public userSupplies; // account -> asset -> amount
 
-    /// @dev Fee rate for swap using reserves
-    uint256 public override swapFeeRate = 5 * 1e4; // 0.05%
+    /**
+     * @dev Fee rate for swaps.
+     *
+     * Note this is under the `FEE_PRECISION` (1e8).
+     */
+    uint256 public override swapFeeRate = 1 * 1e4; // 0.01%
 
-    /// @dev Accrued fee for assets
+    /**
+     * @dev Accrued and unclaimed fee by assets.
+     */
     mapping(address => uint256) public accruedFees;
 
-    /// @dev Recipient for accrued fees
+    /**
+     * @dev Recipient of swap fee.
+     *
+     * Note `address(0)` will keep accumulated fees but transfers are disabled.
+     */
     address public swapFeeRecipient = address(0);
 
-    bool public isDepositPaused;
-    bool public isSwapPaused;
-    bool public isEmergencyWithdrawEnabled;
+    /**
+     * @dev Whether deposits are paused.
+     */
+    bool public isDepositPaused = false;
+
+    /**
+     * @dev Whether swaps are paused.
+     */
+    bool public isSwapPaused = false;
+
+    /**
+     * @dev Whether emergency withdrawal is allowed.
+     */
+    bool public isEmergencyWithdrawEnabled = false;
+
+    struct MinterInfo {
+        bool isMinter;
+        uint256 cap;
+        uint256 supply;
+    }
 
     /// @dev Mint cap and spent cap for minters
-    mapping(address => Profile) minterProfiles;
+    mapping(address => MinterInfo) minterInfo;
 
-    /// @dev Minters that has a cap
+    /**
+     * @dev Addresses of all minters.
+     */
     address[] public minters;
 
-    /// @dev Verifier to verify on deposit and swap
-    address public verifier;
+    /**
+     * @dev Verifier to verify deposits and swaps.
+     *
+     * Note `address(0)` indicates no verifier.
+     */
+    address public verifier = address(0);
 
-    event Deposit(address indexed sender, uint256 timestamp, address indexed asset, uint256 assetAmount, address indexed to);
-    event Withdraw(address indexed sender, uint256 timestamp, address indexed asset, uint256 nativeAmount, uint256 amountOut, address indexed to);
-    event Swap(address indexed sender, uint256 timestamp, address indexed assetIn, address assetOut, uint256 amountIn, uint256 amountOut, address indexed to);
+    event Deposit(address indexed sender, address indexed asset, uint256 assetAmount);
+    event Withdraw(address indexed sender, address indexed asset, uint256 nativeAmount, uint256 amountOut);
+    event Swap(address indexed sender, address indexed assetIn, address assetOut, uint256 amountIn, uint256 amountOut);
 
     constructor() ERC20WithPermit() Ownable() {
         _initializeMetadata("Sync USD", "USDs");
     }
 
-    // ----------------------------------------
-    //  Management Functions
-    // ----------------------------------------
+    /*//////////////////////////////////////////////////////////////
+        ADMIN FUNCTIONS
+    //////////////////////////////////////////////////////////////*/
 
-    function setVerifier(address newVerifier) external onlyOwner {
-        verifier = newVerifier;
+    /**
+     * @dev Lists an asset.
+     */
+    function addAsset(address _asset) external onlyOwner {
+        require(_asset != address(0), "Invalid asset");
+        require(IERC20(_asset).balanceOf(address(this)) != type(uint256).max, "Invalid asset"); // sanity check
+        require(!assetInfo[_asset].exists, "Asset already exists");
+
+        assetInfo[_asset].exists = true;
+        listedAssets.push(_asset);
     }
 
-    // ---------- Cap ----------
+    /**
+     * @dev Delists an asset.
+     *
+     * Note only asset with zero reserve could be removed.
+     */
+    function removeAsset(address _asset) external onlyOwner {
+        AssetInfo memory _info = assetInfo[_asset];
+        require(_info.exists, "Asset is not listed");
+        require(_info.reserve == 0, "Cannot remove asset with reserve");
 
-    /// @dev Set a new cap for given asset
-    function setCap(address asset, uint256 newCap) external onlyOwner {
-        require(asset != address(0) && asset != address(this), "Illegal asset address");
-        require(IERC20(asset).balanceOf(address(this)) != type(uint256).max, "Invalid asset");
+        delete assetInfo[_asset];
 
-        uint256 _previousCap = assetProfiles[asset].cap;
-        require(_previousCap != newCap, "Cap is not changed");
+        uint256 _assetsLength = listedAssets.length;
+        for (uint256 i = 0; i < _assetsLength; ) {
+            if (listedAssets[i] == _asset) {
+                listedAssets[i] = listedAssets[_assetsLength - 1];
+                listedAssets.pop();
+                break;
+            }
 
-        assetProfiles[asset].cap = newCap;
-
-        if (_previousCap == 0) {
-            // Adds a new asset
-            listedAssets.push(asset);
-            return;
-        }
-
-        if (newCap == 0) {
-            // Removes an exist asset / do not reset its reserve
-            address[] memory _assets = listedAssets;
-            for (uint i = 0; i < _assets.length; i++) {
-                if (_assets[i] == asset) {
-                    listedAssets[i] = _assets[_assets.length - 1];
-                    listedAssets.pop();
-                }
+            unchecked {
+                ++i;
             }
         }
     }
 
-    // ---------- Fee ----------
+    /**
+     * @dev Sets deposit cap for an asset.
+     */
+    function setCap(address _asset, uint256 _newCap) external onlyOwner {
+        AssetInfo memory _info = assetInfo[_asset];
+        require(_info.exists, "Asset is not listed");
+        require(_info.cap != _newCap, "No changes made");
 
-    /// @dev Set a new swap fee rate
-    function setSwapFeeRate(uint256 newFeeRate) external onlyOwner {
-        require(newFeeRate <= FEE_PRECISION, "Illegal fee rate");
-        swapFeeRate = newFeeRate;
+        assetInfo[_asset].cap = _newCap;
     }
 
-    /// @dev Set a new fee recipient
+    /**
+     * @dev Adds a minter.
+     */
+    function addMinter(address _minter) external onlyOwner {
+        require(_minter != address(0) && _minter != address(this), "Invalid minter");
+        require(!minterInfo[_minter].isMinter, "Minter already exists");
+
+        minterInfo[_minter].isMinter = true;
+        minters.push(_minter);
+    }
+
+    /**
+     * @dev Removes a minter.
+     *
+     * Note only minter with zero supply could be removed.
+     */
+    function removeMinter(address _minter) external onlyOwner {
+        MinterInfo memory _info = minterInfo[_minter];
+        require(_info.isMinter, "Not a minter");
+        require(_info.supply == 0, "Cannot remove minter with supply");
+
+        delete minterInfo[_minter];
+
+        uint256 _mintersLength = minters.length;
+        for (uint256 i = 0; i < _mintersLength; ) {
+            if (minters[i] == _minter) {
+                minters[i] = minters[_mintersLength - 1];
+                minters.pop();
+                break;
+            }
+
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    /**
+     * @dev Sets supply cap for a minter.
+     */
+    function setMinterCap(address _minter, uint256 _newCap) external onlyOwner {
+        MinterInfo memory _info = minterInfo[_minter];
+        require(_info.isMinter, "Not a minter");
+        require(_info.cap != _newCap, "No changes made");
+
+        minterInfo[_minter].cap = _newCap;
+    }
+
+    /**
+     * @dev Mint tokens for recipient, can only be called by minter.
+     */
+    function mint(address _to, uint256 _amount) external {
+        require(_amount != 0, "Invalid amount to mint");
+
+        MinterInfo memory _info = minterInfo[msg.sender];
+        require(_info.supply + _amount <= _info.cap, "EXCEEDS_CAP"); // single check is sufficient
+
+        unchecked {
+            minterInfo[msg.sender].supply += _amount;
+        }
+        _mint(_to, _amount);
+    }
+
+    /**
+     * @dev Burn tokens from caller, can only be called by minter.
+     */
+    function burn(uint256 _amount) external {
+        require(_amount != 0, "Invalid amount to burn");
+        require(minterInfo[msg.sender].isMinter, "Not a minter");
+
+        minterInfo[msg.sender].supply -= _amount;
+        _burn(msg.sender, _amount);
+    }
+
+    /**
+     * @dev Sets verifier.
+     */
+    function setVerifier(address _verifier) external onlyOwner {
+        verifier = _verifier;
+    }
+
+    /**
+     * @dev Sets swap fee rate.
+     */
+    function setSwapFeeRate(uint256 _swapFeeRate) external onlyOwner {
+        require(_swapFeeRate <= FEE_PRECISION, "Invalid swap fee rate");
+        swapFeeRate = _swapFeeRate;
+    }
+
+    /**
+     * @dev Sets fee recipient.
+     */
     function setSwapFeeRecipient(address newRecipient) external onlyOwner {
         swapFeeRecipient = newRecipient;
     }
 
-    function _transferAccruedFeesFor(address asset, address to) private {
-        uint256 accruedFeesFor = accruedFees[asset];
-        accruedFees[asset] = 0;
-        TransferHelper.safeTransfer(asset, to, accruedFeesFor);
+    /**
+     * @dev Sets pausing status for deposits.
+     */
+    function setDepositPaused(bool _isDepositPaused) external onlyOwner {
+        isDepositPaused = _isDepositPaused;
     }
 
-    function _feeRecipient() private view returns (address) {
-        return swapFeeRecipient != address(0) ? swapFeeRecipient : owner();
+    /**
+     * @dev Sets pausing status for swaps.
+     */
+    function setSwapPaused(bool _isSwapPaused) external onlyOwner {
+        isSwapPaused = _isSwapPaused;
     }
 
-    /// @dev Permissionless transfer accrued fees for given asset
-    function transferAccruedFeesFor(address asset) external {
-        address _to = _feeRecipient();
-        _transferAccruedFeesFor(asset, _to);
+    /**
+     * @dev Sets status of emergency withdrawal.
+     */
+    function setEmergencyWithdrawEnabled(bool _isEmergencyWithdrawEnabled) external onlyOwner {
+        isEmergencyWithdrawEnabled = _isEmergencyWithdrawEnabled;
     }
 
-    /// @dev Permissionless transfer all accrued fees
-    function transferAllAccruedFees() external {
-        address _to = _feeRecipient();
-        for (uint i = 0; i < listedAssets.length; i++) {
-            _transferAccruedFeesFor(listedAssets[i], _to);
-        }
+    /**
+     * @dev Rescues all possible amount for given token.
+     */
+    function rescueERC20(address _token) external onlyOwner {
+        TransferHelper.safeTransfer(_token, msg.sender, rescuableERC20(_token));
     }
 
-    // ---------- Pause ----------
+    /*//////////////////////////////////////////////////////////////
+        VIEW FUNCTIONS
+    //////////////////////////////////////////////////////////////*/
 
-    /// @dev Pause or unpause deposit
-    function setDepositPaused(bool newStatus) external onlyOwner {
-        isDepositPaused = newStatus;
-    }
-
-    /// @dev Pause or unpause swap
-    function setSwapPaused(bool newStatus) external onlyOwner {
-        isSwapPaused = newStatus;
-    }
-
-    /// @dev Enable or disable emergency withdrawal
-    function setEmergencyWithdrawEnabled(bool newStatus) external onlyOwner {
-        isEmergencyWithdrawEnabled = newStatus;
-    }
-
-    // ---------- Minter ----------
-
-    /// @dev Set a new cap for given minter
-    function setMinterCap(address minter, uint256 newCap) external onlyOwner {
-        require(minter != address(0) && minter != address(this), "Illegal minter address");
-
-        uint256 _previousCap = minterProfiles[minter].cap;
-        require(_previousCap != newCap, "Cap is not changed");
-
-        minterProfiles[minter].cap = newCap;
-
-        if (_previousCap == 0) {
-            // Adds a new minter
-            minters.push(minter);
-            return;
-        }
-
-        if (newCap == 0) {
-            // Removes an exist minter / do not reset its reserve
-            address[] memory _minters = minters;
-            for (uint i = 0; i < _minters.length; i++) {
-                if (_minters[i] == minter) {
-                    minters[i] = _minters[_minters.length - 1];
-                    minters.pop();
-                }
-            }
-        }
-    }
-
-    /// @dev Mint tokens for recipient
-    function mint(address to, uint256 amount) external {
-        require(amount != 0, "Illegal amount to mint");
-
-        Profile memory _profile = minterProfiles[msg.sender];
-        require(_profile.reserve + amount <= _profile.cap, "EXCEEDS_CAP");
-
-        minterProfiles[msg.sender].reserve += amount;
-        _mint(to, amount);
-    }
-
-    /// @dev Burn tokens for caller minter
-    function burn(uint256 amount) external {
-        require(amount != 0, "Illegal amount to mint");
-
-        minterProfiles[msg.sender].reserve -= amount;
-        _burn(msg.sender, amount);
-    }
-
-    /// @dev Returns length of all minters
+    /**
+     * @dev Returns length of all minters.
+     */
     function mintersLength() external view returns (uint256) {
         return minters.length;
     }
 
-    // ---------- Rescue ----------
+    /**
+     * @dev Returns all minters.
+     */
+    function getMinters() external view returns (address[] memory) {
+        return minters;
+    }
 
-    /// @dev Return rescuable amount for given token
-    function rescuableERC20(address token) public view returns (uint256 amount) {
-        amount = IERC20(token).balanceOf(address(this));
-        Profile memory _profile = assetProfiles[token];
-        amount -= _profile.reserve;
-        uint256 _accruedFeesFor = accruedFees[token];
+    /**
+     * @dev Returns rescuable amount for given token.
+     */
+    function rescuableERC20(address _token) public view returns (uint256 amount) {
+        amount = IERC20(_token).balanceOf(address(this));
+
+        // Remove reserves.
+        AssetInfo memory _info = assetInfo[_token];
+        amount -= _info.reserve;
+
+        // Remove accrued fees.
+        uint256 _accruedFeesFor = accruedFees[_token];
         amount -= _accruedFeesFor;
     }
 
-    /// @dev Rescue all rescuable amount for given token
-    function rescueERC20(address token) external onlyOwner {
-        uint256 amount = rescuableERC20(token);
-        TransferHelper.safeTransfer(token, msg.sender, amount);
-    }
-
-    // ----------------------------------------
-    //  View Functions
-    // ----------------------------------------
-
-    struct Reserve {
+    struct ReserveInfo {
         address asset;
         uint256 cap;
         uint256 reserve;
         uint256 supplied;
     }
 
-    /// @dev Return reserves and supplies of all assets for given account
-    function getReserves(address account) external view returns (uint256 feeRate, Reserve[] memory reserves) {
-        reserves = new Reserve[](listedAssets.length);
+    /**
+     * @dev Returns swap fee, reserve and supply for all assets as of given account.
+     */
+    function getReserves(address _account) external view returns (uint256 swapFee, ReserveInfo[] memory reserves) {
+        swapFee = swapFeeRate;
+        reserves = new ReserveInfo[](listedAssets.length);
 
         for (uint i = 0; i < listedAssets.length; ) {
             address _asset = listedAssets[i];
-            Profile memory _profile = assetProfiles[_asset];
+            AssetInfo memory _info = assetInfo[_asset];
 
-            reserves[i] = Reserve({
+            reserves[i] = ReserveInfo({
                 asset: _asset,
-                cap: _profile.cap,
-                reserve: _profile.reserve,
-                supplied: userSupplies[account][_asset]
+                cap: _info.cap,
+                reserve: _info.reserve,
+                supplied: userSupplies[_account][_asset]
             });
 
             unchecked {
                 ++i;
             }
         }
-
-        feeRate = swapFeeRate;
     }
 
+    /**
+     * @dev Returns length of all listed assets.
+     */
     function listedAssetsLength() external view returns (uint256) {
         return listedAssets.length;
     }
 
-    // ----------------------------------------
-    //  Deposit
-    // ----------------------------------------
+    /**
+     * @dev Returns all listed assets.
+     */
+    function getListedAssets() external view returns (address[] memory) {
+        return listedAssets;
+    }
 
-    function _tryVerifyDeposit(address asset, uint256 assetAmount) private view returns (bool) {
+    /**
+     * @dev Returns withdraw fee for a withdrawal.
+     */
+    function getWithdrawFee(address _account, address _asset, uint256 _amount) public view override returns (uint256) {
+        uint256 _supplied = userSupplies[_account][_asset];
+        if (_supplied != 0) {
+            if (_supplied >= _amount) {
+                // Consume part of points, no need to charge fees.
+                return 0;
+            } else {
+                // Consume all points and charge remaining fees.
+                return _getSwapFee(_amount - _supplied);
+            }
+        } else {
+            // Charge the full fees.
+            return _getSwapFee(_amount);
+        }
+    }
+
+    /**
+     * @dev Returns expected output amount for a withdrawal.
+     */
+    function getWithdrawOut(address _account, address _asset, uint256 _amount) public view override returns (uint256) {
+        return _amount - getWithdrawFee(_account, _asset, _amount);
+    }
+
+    /**
+     * @dev Returns expected output amount for a swap.
+     */
+    function getSwapOut(address account, address _assetIn, address _assetOut, uint256 _amountIn) external view override returns (uint256 _amountOut) {
+        // Converts amount from input asset to output asset
+        _amountOut = _toOutputAmount(_assetIn, _assetOut, _amountIn);
+        return getWithdrawOut(account, _assetOut, _amountOut);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+        USER FUNCTIONS
+    //////////////////////////////////////////////////////////////*/
+
+    /**
+     * @dev Returns recipient of protocol fee.
+     */
+    function _feeRecipient() internal view returns (address) {
+        address _swapFeeRecipient = swapFeeRecipient;
+        require(_swapFeeRecipient != address(0), "No fee recipient");
+        return _swapFeeRecipient;
+    }
+
+    /**
+     * @dev Transfers accrued fee of an asset to recipient.
+     */
+    function _transferAccruedFeeFor(address _asset, address _to) internal {
+        uint256 _fee = accruedFees[_asset];
+        accruedFees[_asset] = 0;
+        TransferHelper.safeTransfer(_asset, _to, _fee);
+    }
+
+    /**
+     * @dev Permissionless transfer accrued fee for given asset.
+     */
+    function transferAccruedFeeFor(address _asset) external nonReentrant {
+        _transferAccruedFeeFor(_asset, _feeRecipient());
+    }
+
+    /**
+     * @dev Permissionless transfer all accrued fees.
+     */
+    function transferAllAccruedFees() external nonReentrant {
+        address _to = _feeRecipient();
+        uint256 _length = listedAssets.length;
+
+        for (uint i = 0; i < _length; ) {
+            _transferAccruedFeeFor(listedAssets[i], _to);
+
+            unchecked {
+                ++i;
+            }
+        }
+    }
+
+    /*//////////////////////////////////////////////////////////////
+        Deposit
+    //////////////////////////////////////////////////////////////*/
+
+    /**
+     * @dev Converts decimals from given asset to native asset.
+     */
+    function _toNativeAmount(address _asset, uint256 _amountAsset) internal view returns (uint256) {
+        return _amountAsset * 1e18 / (10 ** IERC20Metadata(_asset).decimals());
+    }
+
+    /**
+     * @dev Converts decimals from native asset to given asset.
+     */
+    function _toAssetAmount(address _asset, uint256 _amountNative) internal view returns (uint256) {
+        return _amountNative * (10 ** IERC20Metadata(_asset).decimals()) / 1e18;
+    }
+
+    /**
+     * @dev Converts decimals from an asset to another asset.
+     */
+    function _toOutputAmount(address _assetA, address _assetB, uint256 _amountA) internal view returns (uint256) {
+        return _amountA * (10 ** IERC20Metadata(_assetB).decimals()) / (10 ** IERC20Metadata(_assetA).decimals());
+    }
+
+    function _tryVerifyDeposit(address _asset, uint256 _amount) internal view returns (bool) {
         address _verifier = verifier;
-        return _verifier == address(0) || IPSMVerifier(_verifier).verifyDeposit(asset, assetAmount);
+        return _verifier == address(0) || IPSMVerifier(_verifier).verifyDeposit(msg.sender, _asset, _amount);
     }
 
-    /// @dev Converts from asset amount to native amount in decimals
-    function _toNativeAmount(address asset, uint256 assetAmount) private view returns (uint256) {
-        return assetAmount * 1e18 / (10 ** IERC20Metadata(asset).decimals());
-    }
-
-    /// @dev Converts from native amount to asset amount in decimals
-    function _toAssetAmount(address asset, uint256 nativeAmount) private view returns (uint256) {
-        return nativeAmount * (10 ** IERC20Metadata(asset).decimals()) / 1e18;
-    }
-
-    /// @dev Converts from amount of input asset to amount of output asset in decimals
-    function _toOutputAmount(address assetIn, address assetOut, uint256 amountIn) private view returns (uint256) {
-        return amountIn * (10 ** IERC20Metadata(assetOut).decimals()) / (10 ** IERC20Metadata(assetIn).decimals());
-    }
-
-    /// @dev Deposit given asset and amount for recipient
-    function deposit(address asset, uint256 assetAmount, address to) external override nonReentrant {
-        // 1. Check: Input: Check recipient address
-        require(to != address(0) && to != address(this), "Invalid recipient address");
-
-        // 1-1. Check: Input: Check input amount
+    /**
+     * @dev Deposits given asset and amount for on behalf of a recipient.
+     */
+    function deposit(address asset, uint256 assetAmount) external override nonReentrant {
+        // 1. Check: Input: Check input amount
         require(assetAmount != 0, "Amount must greater than zero");
 
         // ------------------------------
@@ -301,8 +484,8 @@ contract SyncPSM is ISyncPSM, ERC20WithPermit, Ownable, ReentrancyGuard {
         require(_tryVerifyDeposit(asset, assetAmount), "Verification not passed");
 
         // 2-3. Check: Condition: Check cap
-        Profile memory _profile = assetProfiles[asset];
-        require(_profile.reserve + assetAmount <= _profile.cap, "EXCEEDS_CAP");
+        AssetInfo memory _info = assetInfo[asset];
+        require(_info.reserve + assetAmount <= _info.cap, "EXCEEDS_CAP");
 
         // ------------------------------
 
@@ -310,49 +493,53 @@ contract SyncPSM is ISyncPSM, ERC20WithPermit, Ownable, ReentrancyGuard {
         TransferHelper.safeTransferFrom(asset, msg.sender, address(this), assetAmount);
         
         // 3-1. Effects: Increase reserve and user supplies
-        assetProfiles[asset].reserve += assetAmount;
-        userSupplies[to][asset] += assetAmount;
+        unchecked {
+            assetInfo[asset].reserve += assetAmount;
+        }
+        userSupplies[msg.sender][asset] += assetAmount;
 
         // 3-2. Convert amount and mint native asset
-        uint256 nativeAmount = _toNativeAmount(asset, assetAmount);
-        _mint(to, nativeAmount);
+        uint256 _nativeAmount = _toNativeAmount(asset, assetAmount);
+        _mint(msg.sender, _nativeAmount);
 
         // ------------------------------
 
         // 4. Emit deposit event
-        emit Deposit(msg.sender, block.timestamp, asset, assetAmount, to);
+        emit Deposit(msg.sender, asset, assetAmount);
     }
 
-    // ----------------------------------------
-    //  Withdraw
-    // ----------------------------------------
+    /*//////////////////////////////////////////////////////////////
+        Withdraw
+    //////////////////////////////////////////////////////////////*/
 
-    function _getSwapFee(uint256 amount) private view returns (uint256) {
-        if (swapFeeRate == 0) {
+    function _getSwapFee(uint256 _amount) internal view returns (uint256) {
+        uint256 _swapFeeRate = swapFeeRate;
+        if (_swapFeeRate == 0) {
             return 0;
         } else {
-            return amount * swapFeeRate / FEE_PRECISION;
+            return _amount * _swapFeeRate / FEE_PRECISION;
         }
     }
 
-    function _chargeSwapFees(address asset, uint256 assetAmount) private returns (uint256 fee) {
-        fee = _getSwapFee(assetAmount);
-        if (fee != 0) {
-            accruedFees[asset] += fee;
+    function _chargeSwapFees(address _asset, uint256 _amount) internal returns (uint256) {
+        uint256 _fee = _getSwapFee(_amount);
+        if (_fee != 0) {
+            accruedFees[_asset] += _fee;
         }
+        return _fee;
     }
 
-    function _tryChargeSwapFees(address account, address asset, uint256 assetAmount) private returns (uint256 fee) {
-        uint256 supplied = userSupplies[account][asset];
-        if (supplied != 0) {
-            if (supplied >= assetAmount) {
+    function _tryChargeSwapFees(address account, address asset, uint256 assetAmount) internal returns (uint256 fee) {
+        uint256 _supplied = userSupplies[account][asset];
+        if (_supplied != 0) {
+            if (_supplied >= assetAmount) {
                 // Consume part of points, no need to charge fees
                 userSupplies[account][asset] -= assetAmount;
                 fee = 0;
             } else {
                 // Consume all points and charge remaining fees
                 userSupplies[account][asset] = 0;
-                fee = _chargeSwapFees(asset, assetAmount - supplied);
+                fee = _chargeSwapFees(asset, assetAmount - _supplied);
             }
         } else {
             // Charge the full fees
@@ -360,47 +547,27 @@ contract SyncPSM is ISyncPSM, ERC20WithPermit, Ownable, ReentrancyGuard {
         }
     }
 
-    /// @dev Return expected output amount of a withdrawal
-    function getWithdrawOut(address account, address asset, uint256 assetAmount) public view override returns (uint256) {
-        uint256 supplied = userSupplies[account][asset];
-        if (supplied != 0) {
-            if (supplied >= assetAmount) {
-                // Consume part of points, no need to charge fees
-                return assetAmount;
-            } else {
-                // Consume all points and charge remaining fees
-                uint256 fee = _getSwapFee(assetAmount - supplied);
-                return assetAmount - fee;
-            }
-        } else {
-            // Charge the full fees
-            uint256 fee = _getSwapFee(assetAmount);
-            return assetAmount - fee;
-        }
-    }
-
-    function _withdrawAsset(address asset, uint256 assetAmount, address to) private returns (uint256 amountOut) {
+    function _withdrawAsset(address asset, uint256 assetAmount) internal returns (uint256 amountOut) {
         // Decrease asset reserve
-        assetProfiles[asset].reserve -= assetAmount;
+        assetInfo[asset].reserve -= assetAmount;
 
         // Charge swap fees (if exists) upon output amount
-        uint256 fees = _tryChargeSwapFees(to, asset, assetAmount);
-        amountOut = assetAmount - fees;
+        uint256 _fee = _tryChargeSwapFees(msg.sender, asset, assetAmount);
+        amountOut = assetAmount - _fee;
 
         // Transfer output asset
         require(amountOut != 0, "INSUFFICIENT_INPUT");
-        TransferHelper.safeTransfer(asset, to, amountOut);
+        TransferHelper.safeTransfer(asset, msg.sender, amountOut);
     }
 
-    /// @dev Withdraw given amount and asset to recipient
-    function withdraw(address asset, uint256 nativeAmount, address to) external override nonReentrant returns (uint256 amountOut) {
-        // 1. Check: Input: Check recipient address
-        require(to != address(0) && to != address(this), "Invalid recipient address");
-
-        // 1-1. Check: Input: Check input amount
+    /**
+     * @dev Withdraws given amount and asset.
+     */
+    function withdraw(address asset, uint256 nativeAmount) external override nonReentrant returns (uint256 amountOut) {
+        // 1. Check: Input: Check input amount
         require(nativeAmount != 0, "Amount must greater than zero");
 
-        // ------------------------------
+        ////////////////////////////////////////////////////////////////
 
         // 2. Effects: Burn native asset
         _burn(msg.sender, nativeAmount);
@@ -409,17 +576,16 @@ contract SyncPSM is ISyncPSM, ERC20WithPermit, Ownable, ReentrancyGuard {
         amountOut = _toAssetAmount(asset, nativeAmount);
 
         // 2-3. Withdraw output asset
-        amountOut = _withdrawAsset(asset, amountOut, to);
+        amountOut = _withdrawAsset(asset, amountOut);
         
-        // ------------------------------
+        ////////////////////////////////////////////////////////////////
 
         // 4. Emit withdraw event
-        emit Withdraw(msg.sender, block.timestamp, asset, nativeAmount, amountOut, to);
+        emit Withdraw(msg.sender, asset, nativeAmount, amountOut);
     }
 
-    function emergencyWithdraw(address asset, uint256 nativeAmount, address to) external nonReentrant returns (uint256 amountOut) {
+    function emergencyWithdraw(address asset, uint256 nativeAmount) external nonReentrant returns (uint256 amountOut) {
         require(isEmergencyWithdrawEnabled, "Emergency withdraw is not enabled");
-        require(to != address(0) && to != address(this), "Invalid recipient address");
         require(nativeAmount != 0, "Amount must greater than zero");
 
         // Burn and transfer asset
@@ -430,38 +596,31 @@ contract SyncPSM is ISyncPSM, ERC20WithPermit, Ownable, ReentrancyGuard {
         // Ignore reserves and fees in the emergency case
         userSupplies[msg.sender][asset] = 0;
 
-        TransferHelper.safeTransfer(asset, to, amountOut);
+        TransferHelper.safeTransfer(asset, msg.sender, amountOut);
 
-        emit Withdraw(msg.sender, block.timestamp, asset, nativeAmount, amountOut, to);
+        emit Withdraw(msg.sender, asset, nativeAmount, amountOut);
     }
 
-    // ----------------------------------------
-    //  Swap
-    // ----------------------------------------
+    /*//////////////////////////////////////////////////////////////
+        Swap
+    //////////////////////////////////////////////////////////////*/
 
     function _tryVerifySwap(address assetIn, address assetOut, uint256 amountIn) private view returns (bool) {
         address _verifier = verifier;
-        return _verifier == address(0) || IPSMVerifier(_verifier).verifySwap(assetIn, assetOut, amountIn);
+        return _verifier == address(0) || IPSMVerifier(_verifier).verifySwap(msg.sender, assetIn, assetOut, amountIn);
     }
 
-    /// @dev Return expected output amount of a swap
-    function getSwapOut(address account, address assetIn, address assetOut, uint256 amountIn) external view override returns (uint256 amountOut) {
-        amountOut = _toOutputAmount(assetIn, assetOut, amountIn);
-        return getWithdrawOut(account, assetOut, amountOut);
-    }
-
-    /// @dev Swap from input asset in given amount to output asset with recipient
-    function swap(address assetIn, address assetOut, uint256 amountIn, address to) external override nonReentrant returns (uint256 amountOut) {
+    /**
+     * @dev Swaps from input asset in given amount to the output asset.
+     */
+    function swap(address assetIn, address assetOut, uint256 amountIn) external override nonReentrant returns (uint256 amountOut) {
         // 1-1. Check: Input: Check asset addresses
         require(assetIn != assetOut, "Identical assets");
         
-        // 1-2. Check: Input: Check recipient address
-        require(to != address(0) && to != address(this), "Invalid recipient address");
-        
-        // 1-3. Check: Input: Check input amount
+        // 1-2. Check: Input: Check input amount
         require(amountIn != 0, "Amount must greater than zero");
 
-        // ------------------------------
+        ////////////////////////////////////////////////////////////////
 
         // 2. Check: Condition: Check paused
         require(!isSwapPaused, "Swap is paused");
@@ -470,28 +629,30 @@ contract SyncPSM is ISyncPSM, ERC20WithPermit, Ownable, ReentrancyGuard {
         require(_tryVerifySwap(assetIn, assetOut, amountIn), "Verification not passed");
 
         // 2-2. Check: Condition: Check cap
-        Profile memory _profileIn = assetProfiles[assetIn];
-        require(_profileIn.reserve + amountIn <= _profileIn.cap, "EXCEEDS_CAP");
+        AssetInfo memory _infoIn = assetInfo[assetIn];
+        require(_infoIn.reserve + amountIn <= _infoIn.cap, "EXCEEDS_CAP");
 
-        // ------------------------------
+        ////////////////////////////////////////////////////////////////
 
         // 7. Interaction: Receive input asset
         TransferHelper.safeTransferFrom(assetIn, msg.sender, address(this), amountIn);
 
         // 7-1. Effects: Increase reserve for input asset
-        assetProfiles[assetIn].reserve += amountIn;
+        unchecked {
+            assetInfo[assetIn].reserve += amountIn;
+        }
 
-        // ------------------------------
+        ////////////////////////////////////////////////////////////////
 
         // 8. Convert from input amount to output amount
         amountOut = _toOutputAmount(assetIn, assetOut, amountIn);
 
         // 8-2. Withdraw output asset
-        amountOut = _withdrawAsset(assetOut, amountOut, to);
+        amountOut = _withdrawAsset(assetOut, amountOut);
 
-        // ------------------------------
+        ////////////////////////////////////////////////////////////////
 
         // 9. Emit swap event
-        emit Swap(msg.sender, block.timestamp, assetIn, assetOut, amountIn, amountOut, to);
+        emit Swap(msg.sender, assetIn, assetOut, amountIn, amountOut);
     }
 }

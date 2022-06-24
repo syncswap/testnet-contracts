@@ -16,14 +16,12 @@ interface ISyncSwapRouter is IUniswapV2Router02 {
     function depositPSM(
         address asset,
         uint256 assetAmount,
-        address to,
         uint deadline
     ) external;
 
     function withdrawPSM(
         address asset,
         uint256 nativeAmount,
-        address to,
         uint deadline
     ) external;
 
@@ -31,7 +29,6 @@ interface ISyncSwapRouter is IUniswapV2Router02 {
         address assetIn,
         address assetOut,
         uint256 amountIn,
-        address to,
         uint deadline
     ) external;
 }
