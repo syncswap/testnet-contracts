@@ -13,22 +13,7 @@ interface ISyncSwapRouter is IUniswapV2Router02 {
     function indexedPairsRange(address account, uint256 start, uint256 counts) external view returns (address[] memory);
     function indexedPairsLengthOf(address account) external view returns (uint256);
 
-    function depositPSM(
-        address asset,
-        uint256 assetAmount,
-        uint deadline
-    ) external;
-
-    function withdrawPSM(
-        address asset,
-        uint256 nativeAmount,
-        uint deadline
-    ) external;
-
-    function swapPSM(
-        address assetIn,
-        address assetOut,
-        uint256 amountIn,
-        uint deadline
-    ) external;
+    function depositPSM(address asset, uint256 assetAmount, uint deadline) external;
+    function withdrawPSM(address asset, uint256 nativeAmount, address to, uint deadline) external;
+    function swapPSM(address assetIn, address assetOut, uint256 amountIn, address to, uint deadline) external;
 }

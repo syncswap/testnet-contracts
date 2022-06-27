@@ -69,23 +69,25 @@ contract SyncSwapRouter is ISyncSwapRouter, SyncSwapRouterInternal {
     function withdrawPSM(
         address asset,
         uint256 nativeAmount,
+        address to,
         uint deadline
     ) external override ensureNotExpired(deadline) {
         address _psm = psm;
         TransferHelper.safeTransferFrom(_psm, msg.sender, address(this), nativeAmount);
-        ISyncPSM(_psm).withdraw(asset, nativeAmount);
+        ISyncPSM(_psm).withdraw(asset, nativeAmount, to);
     }
 
     function swapPSM(
         address assetIn,
         address assetOut,
         uint256 amountIn,
+        address to,
         uint deadline
     ) external override ensureNotExpired(deadline) {
         address _psm = psm;
         TransferHelper.safeTransferFrom(assetIn, msg.sender, address(this), amountIn);
         IERC20(assetIn).approve(_psm, amountIn);
-        ISyncPSM(_psm).swap(assetIn, assetOut, amountIn);
+        ISyncPSM(_psm).swap(assetIn, assetOut, amountIn, to);
     }
 
     /*//////////////////////////////////////////////////////////////
