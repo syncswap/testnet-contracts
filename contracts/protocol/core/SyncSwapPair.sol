@@ -98,7 +98,7 @@ contract SyncSwapPair is ISyncSwapPair, ERC20WithPermit, ReentrancyGuard {
             return;
         }
 
-        // track account balances
+        // Track account balances.
         (uint _reserve0, uint _reserve1) = _getReserves();
         uint _totalSupply = totalSupply();
 
@@ -128,14 +128,19 @@ contract SyncSwapPair is ISyncSwapPair, ERC20WithPermit, ReentrancyGuard {
         _blockTimestampLast = blockTimestampLast;
     }
 
+    function getReservesSimple() external view override returns (uint112, uint112) {
+        return (reserve0, reserve1);
+    }
+
+    function getSwapFee() public view override returns (uint16) {
+        uint16 _swapFeeOverride = swapFeeOverride;
+        return _swapFeeOverride == SWAP_FEE_INHERIT ? ISyncSwapFactory(factory).swapFee() : _swapFeeOverride;
+    }
+
     function getReservesAndParameters() external view override returns (uint112 _reserve0, uint112 _reserve1, uint16 _swapFee) {
         _reserve0 = reserve0;
         _reserve1 = reserve1;
         _swapFee = getSwapFee();
-    }
-
-    function getReservesSimple() external view override returns (uint112, uint112) {
-        return _getReserves();
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -146,28 +151,6 @@ contract SyncSwapPair is ISyncSwapPair, ERC20WithPermit, ReentrancyGuard {
         return (reserve0, reserve1);
     }
 
-    // update reserves and, on the first call per block, price accumulators
-    function _update(uint balance0, uint balance1, uint112 previousReserve0, uint112 previousReserve1) private {
-        require(balance0 <= type(uint112).max && balance1 <= type(uint112).max, 'OVERFLOW');
-
-        uint32 _currentTimestamp32 = uint32(block.timestamp);
-        unchecked {
-            uint32 _timeElapsed32 = _currentTimestamp32 - blockTimestampLast; // overflow is desired
-
-            if (_timeElapsed32 != 0 && previousReserve0 != 0 && previousReserve1 != 0) {
-                // * never overflows, and + overflow is desired
-                price0CumulativeLast += uint(UQ112x112.encode(previousReserve1).uqdiv(previousReserve0)) * _timeElapsed32;
-                price1CumulativeLast += uint(UQ112x112.encode(previousReserve0).uqdiv(previousReserve1)) * _timeElapsed32;
-            }
-        }
-    
-        reserve0 = uint112(balance0);
-        reserve1 = uint112(balance1);
-        blockTimestampLast = _currentTimestamp32;
-
-        emit Sync(reserve0, reserve1);
-    }
-
     function _getBalances(address _token0, address _token1) private view returns (uint, uint) {
         return (
             IERC20(_token0).balanceOf(address(this)),
@@ -175,14 +158,31 @@ contract SyncSwapPair is ISyncSwapPair, ERC20WithPermit, ReentrancyGuard {
         );
     }
 
-    function getSwapFee() public view override returns (uint16) {
-        uint16 _swapFeeOverride = swapFeeOverride;
-        return _swapFeeOverride == SWAP_FEE_INHERIT ? ISyncSwapFactory(factory).swapFee() : _swapFeeOverride;
+    // update reserves and, on the first call per block, price accumulators
+    function _update(uint balance0, uint balance1, uint112 _reserve0, uint112 _reserve1) private {
+        require(balance0 <= type(uint112).max && balance1 <= type(uint112).max, 'OVERFLOW');
+
+        uint32 blockTimestamp = uint32(block.timestamp);
+        unchecked {
+            uint32 timeElapsed = blockTimestamp - blockTimestampLast; // overflow is desired
+
+            if (timeElapsed > 0 && _reserve0 != 0 && _reserve1 != 0) {
+                // * never overflows, and + overflow is desired
+                price0CumulativeLast += uint(UQ112x112.encode(_reserve1).uqdiv(_reserve0)) * timeElapsed;
+                price1CumulativeLast += uint(UQ112x112.encode(_reserve0).uqdiv(_reserve1)) * timeElapsed;
+            }
+        }
+    
+        reserve0 = uint112(balance0);
+        reserve1 = uint112(balance1);
+        blockTimestampLast = blockTimestamp;
+
+        emit Sync(reserve0, reserve1);
     }
 
-    function _getProtocolFee(uint _totalSupply, uint _rootK2, uint _rootK1, uint8 _protocolFeeFactor) private pure returns (uint) {
+    function _getFeeLiquidity(uint _totalSupply, uint _rootK2, uint _rootK1, uint8 _feeFactor) private pure returns (uint) {
         uint numerator = _totalSupply * (_rootK2 - _rootK1);
-        uint denominator = (_protocolFeeFactor - 1) * _rootK2 + _rootK1;
+        uint denominator = (_feeFactor - 1) * _rootK2 + _rootK1;
         return numerator / denominator;
     }
 
@@ -193,26 +193,27 @@ contract SyncSwapPair is ISyncSwapPair, ERC20WithPermit, ReentrancyGuard {
             address _feeTo = _factory.feeTo();
 
             if (_feeTo != address(0)) {
-                uint _rootKLast = Math.sqrt(_kLast);
-                uint _rootK = Math.sqrt(uint(_reserve0) * _reserve1);
-                uint _protocolFeeLiquidity = _getProtocolFee(totalSupply(), _rootK, _rootKLast, _factory.protocolFeeFactor());
+                uint rootK = Math.sqrt(uint(_reserve0) * _reserve1);
+                uint rootKLast = Math.sqrt(_kLast);
+                uint liquidity = _getFeeLiquidity(totalSupply(), rootK, rootKLast, _factory.protocolFeeFactor());
 
-                if (_protocolFeeLiquidity != 0) {
-                    _mint(_feeTo, _protocolFeeLiquidity);
+                if (liquidity > 0) {
+                    _mint(_feeTo, liquidity);
                 }
             }
         }
     }
 
     /*//////////////////////////////////////////////////////////////
-        Mint (add liquidity)
+        Mint
     //////////////////////////////////////////////////////////////*/
 
     /// @dev this low-level function should be called from a contract which performs important safety checks
     function mint(address to) external nonReentrant override returns (uint liquidity) {
         (uint112 _reserve0, uint112 _reserve1) = _getReserves();
         (uint balance0, uint balance1) = _getBalances(token0, token1);
-        (uint amountIn0, uint amountIn1) = (balance0 - _reserve0, balance1 - _reserve1);
+        uint amount0 = balance0 - _reserve0;
+        uint amount1 = balance1 - _reserve1;
 
         _tryMintProtocolFee(_reserve0, _reserve1);
 
@@ -220,10 +221,10 @@ contract SyncSwapPair is ISyncSwapPair, ERC20WithPermit, ReentrancyGuard {
         uint _totalSupply = totalSupply(); // must be defined here since totalSupply can update in `_tryMintProtocolFee`
 
         if (_totalSupply == 0) {
-            liquidity = Math.sqrt(amountIn0 * amountIn1) - MINIMUM_LIQUIDITY;
+            liquidity = Math.sqrt(amount0 * amount1) - MINIMUM_LIQUIDITY;
             _mint(address(0), MINIMUM_LIQUIDITY); // permanently lock the first MINIMUM_LIQUIDITY tokens
         } else {
-            liquidity = Math.min(amountIn0 * _totalSupply / _reserve0, amountIn1 * _totalSupply / _reserve1);
+            liquidity = Math.min(amount0 * _totalSupply / _reserve0, amount1 * _totalSupply / _reserve1);
         }
 
         require(liquidity != 0, 'INSUFFICIENT_LIQUIDITY_MINTED');
@@ -233,34 +234,24 @@ contract SyncSwapPair is ISyncSwapPair, ERC20WithPermit, ReentrancyGuard {
         _update(balance0, balance1, _reserve0, _reserve1);
         kLast = uint256(reserve0) * reserve1; // reserve0 and reserve1 are up-to-date
 
-        emit Mint(msg.sender, amountIn0, amountIn1);
+        emit Mint(msg.sender, amount0, amount1);
     }
 
     /*//////////////////////////////////////////////////////////////
-        Burn (remove liquidity)
+        Burn
     //////////////////////////////////////////////////////////////*/
-
-    function _getAmountFromLiquidity(uint _totalSupply, uint liquidity, uint balance) private pure returns (uint) {
-        return liquidity * balance / _totalSupply;
-    }
-
-    /// @dev burn liquidity and transfer out tokens
-    function _burnLiquidity(uint liquidity, address _token0, address _token1, uint amount0, uint amount1, address to) private {
-        _burn(address(this), liquidity);
-
-        _token0.safeTransfer(to, amount0);
-        _token1.safeTransfer(to, amount1);
-    }
 
     /// @dev this low-level function should be called from a contract which performs important safety checks
     function burn(address to) external nonReentrant override returns (uint amount0, uint amount1) {
-        (address _token0, address _token1) = (token0, token1);
         (uint112 _reserve0, uint112 _reserve1) = _getReserves();
+        address _token0 = token0;
+        address _token1 = token1;
+        uint balance0 = IERC20(_token0).balanceOf(address(this));
+        uint balance1 = IERC20(_token1).balanceOf(address(this));
         uint liquidity = balanceOf(address(this));
 
         _tryMintProtocolFee(_reserve0, _reserve1);
 
-        (uint balance0, uint balance1) = _getBalances(_token0, _token1);
         {
         uint _totalSupply = totalSupply(); // must be defined here since totalSupply can update in `_tryMintProtocolFee`
 
@@ -268,13 +259,16 @@ contract SyncSwapPair is ISyncSwapPair, ERC20WithPermit, ReentrancyGuard {
         amount0 = (liquidity * balance0) / _totalSupply;
         amount1 = (liquidity * balance1) / _totalSupply;
 
-        require(amount0 != 0 && amount1 != 0, 'INSUFFICIENT_LIQUIDITY_BURNED');
+        require(amount0 > 0 && amount1 > 0, 'INSUFFICIENT_LIQUIDITY_BURNED');
         }
 
-        _burnLiquidity(liquidity, _token0, _token1, amount0, amount1, to);
-        (balance0, balance1) = _getBalances(_token0, _token1);
+        _burn(address(this), liquidity);
+        _token0.safeTransfer(to, amount0);
+        _token1.safeTransfer(to, amount1);
 
+        (balance0, balance1) = _getBalances(_token0, _token1);
         _update(balance0, balance1, _reserve0, _reserve1);
+
         kLast = uint256(reserve0) * reserve1; // reserve0 and reserve1 are up-to-date
 
         emit Burn(msg.sender, amount0, amount1, to);
@@ -286,7 +280,7 @@ contract SyncSwapPair is ISyncSwapPair, ERC20WithPermit, ReentrancyGuard {
 
     /// @dev this low-level function should be called from a contract which performs important safety checks
     function swap(uint amount0Out, uint amount1Out, address to, bytes calldata data) external override nonReentrant {
-        require(amount0Out != 0 || amount1Out != 0, 'NO_OUTPUT');
+        require(amount0Out > 0 || amount1Out > 0, 'INSUFFICIENT_OUTPUT_AMOUNT');
         (uint112 _reserve0, uint112 _reserve1) = _getReserves();
         require(amount0Out < _reserve0 && amount1Out < _reserve1, 'INSUFFICIENT_LIQUIDITY');
 
@@ -294,104 +288,74 @@ contract SyncSwapPair is ISyncSwapPair, ERC20WithPermit, ReentrancyGuard {
         {
         (address _token0, address _token1) = (token0, token1);
 
-        // transfer out the tokens first and call the callee to support flash swaps
-        if (amount0Out != 0) {
+        if (amount0Out > 0) {
             _token0.safeTransfer(to, amount0Out);
         }
-        if (amount1Out != 0) {
+        if (amount1Out > 0) {
             _token1.safeTransfer(to, amount1Out);
         }
-        if (data.length != 0) {
+        if (data.length > 0) {
             IUniswapV2Callee(to).uniswapV2Call(msg.sender, amount0Out, amount1Out, data);
         }
 
-        // the input amounts have already been sent to the pair
-        // by either the caller function or the callee.
         (balance0After, balance1After) = _getBalances(_token0, _token1);
         }
 
-        // make sure there is at least one input token.
+        // At least one input is required.
         uint amount0In = balance0After > _reserve0 - amount0Out ? balance0After - (_reserve0 - amount0Out) : 0;
         uint amount1In = balance1After > _reserve1 - amount1Out ? balance1After - (_reserve1 - amount1Out) : 0;
-        require(amount0In != 0 || amount1In != 0, 'NO_INPUT_AMOUNT');
+        require(amount0In != 0 || amount1In != 0, 'INSUFFICIENT_INPUT_AMOUNT');
 
         {
-        // make sure the K is correct after fee subtracted.
+        // Checks the K.
         uint16 _swapFee = getSwapFee();
         uint balance0Adjusted = (balance0After * SWAP_FEE_POINT_PRECISION) - (amount0In * _swapFee);
         uint balance1Adjusted = (balance1After * SWAP_FEE_POINT_PRECISION) - (amount1In * _swapFee);
 
-        require(balance0Adjusted * balance1Adjusted >= uint(_reserve0) * _reserve1 * (SWAP_FEE_POINT_PRECISION_SQ), 'K_VIOLATION');
+        require(balance0Adjusted * balance1Adjusted >= uint(_reserve0) * _reserve1 * (SWAP_FEE_POINT_PRECISION_SQ), 'K');
         }
 
         _update(balance0After, balance1After, _reserve0, _reserve1);
-
         emit Swap(msg.sender, amount0In, amount1In, amount0Out, amount1Out, to);
     }
 
-    /*//////////////////////////////////////////////////////////////
-        Swap (1 for 0)
-    //////////////////////////////////////////////////////////////*/
-
     function swapFor0(uint amount0Out, address to) external override nonReentrant {
-        require(amount0Out != 0, 'NO_OUTPUT');
+        require(amount0Out > 0, 'INSUFFICIENT_OUTPUT_AMOUNT');
         (uint112 _reserve0, uint112 _reserve1) = _getReserves();
         require(amount0Out < _reserve0, 'INSUFFICIENT_LIQUIDITY');
 
-        uint balance0After; uint balance1After;
-        (address _token0, address _token1) = (token0, token1);
-        {
+        address _token0 = token0;
         _token0.safeTransfer(to, amount0Out);
-
-        // the input amounts have already been sent to the pair
-        // by either the caller function or the callee.
-        (balance0After, balance1After) = _getBalances(_token0, _token1);
-        }
+        (uint balance0After, uint balance1After) = _getBalances(_token0, token1);
 
         uint amount1In = balance1After - _reserve1;
-        require(amount1In != 0, 'NO_INPUT_AMOUNT');
+        require(amount1In != 0, 'INSUFFICIENT_INPUT_AMOUNT');
 
-        {
-        // make sure the K is correct after fee subtracted.
+        // Checks the K.
         uint balance1Adjusted = (balance1After * SWAP_FEE_POINT_PRECISION) - (amount1In * getSwapFee());
-        require(balance0After * balance1Adjusted >= uint(_reserve0) * _reserve1 * SWAP_FEE_POINT_PRECISION, 'K_VIOLATION');
-        }
+        require(balance0After * balance1Adjusted >= uint(_reserve0) * _reserve1 * SWAP_FEE_POINT_PRECISION, 'K');
 
         _update(balance0After, balance1After, _reserve0, _reserve1);
-
         emit Swap(msg.sender, 0, amount1In, amount0Out, 0, to);
     }
 
-    /*//////////////////////////////////////////////////////////////
-        Swap (0 for 1)
-    //////////////////////////////////////////////////////////////*/
-
     function swapFor1(uint amount1Out, address to) external override nonReentrant {
-        require(amount1Out != 0, 'NO_OUTPUT');
+        require(amount1Out != 0, 'INSUFFICIENT_OUTPUT_AMOUNT');
         (uint112 _reserve0, uint112 _reserve1) = _getReserves();
         require(amount1Out < _reserve1, 'INSUFFICIENT_LIQUIDITY');
 
-        uint balance0After; uint balance1After;
-        (address _token0, address _token1) = (token0, token1);
-        {
+        address _token1 = token1;
         _token1.safeTransfer(to, amount1Out);
-
-        // the input amounts have already been sent to the pair
-        // by either the caller function or the callee.
-        (balance0After, balance1After) = _getBalances(_token0, _token1);
-        }
+        (uint balance0After, uint balance1After) = _getBalances(token0, _token1);
 
         uint amount0In = balance0After - _reserve0;
-        require(amount0In != 0, 'NO_INPUT_AMOUNT');
+        require(amount0In != 0, 'INSUFFICIENT_INPUT_AMOUNT');
 
-        {
-        // make sure the K is correct after fee subtracted.
+        // Checks the K.
         uint balance0Adjusted = (balance0After * SWAP_FEE_POINT_PRECISION) - (amount0In * getSwapFee());
-        require(balance0Adjusted * balance1After >= uint(_reserve0) * _reserve1 * SWAP_FEE_POINT_PRECISION, 'K_VIOLATION');
-        }
+        require(balance0Adjusted * balance1After >= uint(_reserve0) * _reserve1 * SWAP_FEE_POINT_PRECISION, 'K');
 
         _update(balance0After, balance1After, _reserve0, _reserve1);
-
         emit Swap(msg.sender, amount0In, 0, 0, amount1Out, to);
     }
 
@@ -403,9 +367,9 @@ contract SyncSwapPair is ISyncSwapPair, ERC20WithPermit, ReentrancyGuard {
      * @dev Force balances to match reserves, taking out positive balances
      */
     function skim(address to) external override nonReentrant {
-        (address _token0, address _token1) = (token0, token1); // gas savings
+        address _token0 = token0;
+        address _token1 = token1;
         (uint balance0, uint balance1) = _getBalances(_token0, _token1);
-
         _token0.safeTransfer(to, balance0 - reserve0);
         _token1.safeTransfer(to, balance1 - reserve1);
     }

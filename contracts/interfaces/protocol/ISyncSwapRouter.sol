@@ -5,7 +5,7 @@ pragma solidity ^0.8.0;
 import './uniswap/IUniswapV2Router02.sol';
 
 interface ISyncSwapRouter is IUniswapV2Router02 {
-    function psm() external view returns (address);
+    function PSM() external view returns (address);
 
     function isPairIndexed(address account, address pair) external view returns (bool);
     function indexedPairs(address account, uint256) external view returns (address);
@@ -13,7 +13,6 @@ interface ISyncSwapRouter is IUniswapV2Router02 {
     function indexedPairsRange(address account, uint256 start, uint256 counts) external view returns (address[] memory);
     function indexedPairsLengthOf(address account) external view returns (uint256);
 
-    function depositPSM(address asset, uint256 assetAmount, uint deadline) external;
-    function withdrawPSM(address asset, uint256 nativeAmount, address to, uint deadline) external;
+    function depositPSM(address asset, uint256 assetAmount, address to, uint deadline) external;
     function swapPSM(address assetIn, address assetOut, uint256 amountIn, address to, uint deadline) external;
 }

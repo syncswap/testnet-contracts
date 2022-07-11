@@ -97,23 +97,23 @@ describe('SyncPSM', () => {
         const BUSD = Fixtures.use('BUSD');
         const DAI = Fixtures.use('DAI');
         const UST = Fixtures.use('UST');
+        const accountAddress = (await getAccount(0)).address;
 
         // Invalid amount
-        await expect(PSM.deposit(USDC.address, 0)).to.be.revertedWith('Amount must greater than zero');
+        await expect(PSM.deposit(USDC.address, 0, accountAddress)).to.be.revertedWith('Amount must greater than zero');
 
         // Exceeds cap
-        await expect(PSM.deposit(BUSD.address, expandTo18Decimals(100_001))).to.be.revertedWith('EXCEEDS_CAP');
-        await expect(PSM.deposit(UST.address, 1)).to.be.revertedWith('EXCEEDS_CAP'); // Cap is 0 for not listed asset
+        await expect(PSM.deposit(BUSD.address, expandTo18Decimals(100_001), accountAddress)).to.be.revertedWith('EXCEEDS_CAP');
+        await expect(PSM.deposit(UST.address, 1, accountAddress)).to.be.revertedWith('EXCEEDS_CAP'); // Cap is 0 for not listed asset
 
         // Exceeds balance
-        await expect(PSM.deposit(USDC.address, expandToDecimals(1_000_001, 6))).to.be.revertedWith('TransferHelper::transferFrom: transferFrom failed'); // 6 decimals for USDC
+        await expect(PSM.deposit(USDC.address, expandToDecimals(1_000_001, 6), accountAddress)).to.be.revertedWith('TransferHelper::transferFrom: transferFrom failed'); // 6 decimals for USDC
 
-        await PSM.deposit(USDC.address, expandToDecimals(200_000, 6));
-        await PSM.deposit(BUSD.address, expandTo18Decimals(100_000)); // The same amount with cap
-        await PSM.deposit(DAI.address, expandTo18Decimals(20_000));
+        await PSM.deposit(USDC.address, expandToDecimals(200_000, 6), accountAddress);
+        await PSM.deposit(BUSD.address, expandTo18Decimals(100_000), accountAddress); // The same amount with cap
+        await PSM.deposit(DAI.address, expandTo18Decimals(20_000), accountAddress);
 
         // Expect balances are subtracted
-        const accountAddress = (await getAccount(0)).address;
         await expect(await USDC.balanceOf(accountAddress)).to.be.eq(expandToDecimals(800_000, 6)); // 6 decimals for USDC
         await expect(await BUSD.balanceOf(accountAddress)).to.be.eq(expandTo18Decimals(900_000));
         await expect(await DAI.balanceOf(accountAddress)).to.be.eq(expandTo18Decimals(980_000));
@@ -287,7 +287,7 @@ describe('SyncPSM', () => {
 
         // Pause deposit
         await PSM.setDepositPaused(true);
-        await expect(PSM.deposit(USDC.address, 1)).to.be.revertedWith('Deposit is paused');
+        await expect(PSM.deposit(USDC.address, 1, accountAddress)).to.be.revertedWith('Deposit is paused');
         await PSM.setDepositPaused(false);
 
         // Pause swap

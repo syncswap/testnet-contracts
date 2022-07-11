@@ -4,6 +4,7 @@ pragma solidity ^0.8.0;
 
 import './SyncSwapRouterInternal.sol';
 
+import '../../interfaces/IWETH.sol';
 import '../../interfaces/protocol/ISyncSwapRouter.sol';
 import '../../interfaces/protocol/ISyncPSM.sol';
 import '../../interfaces/protocol/core/ISyncSwapFactory.sol';
@@ -15,12 +16,18 @@ import '../../protocol/farm/SyncSwapFarm.sol';
 
 contract SyncSwapRouter is ISyncSwapRouter, SyncSwapRouterInternal {
 
-    address public immutable override psm;
     address public immutable override factory;
+    address public immutable override WETH;
+    address public immutable override PSM;
 
-    constructor(address _factory, address _psm) {
+    constructor(address _factory, address _WETH, address _PSM) {
         factory = _factory;
-        psm = _psm;
+        WETH = _WETH;
+        PSM = _PSM;
+    }
+
+    receive() external payable {
+        assert(msg.sender == WETH); // only accept ETH via fallback from the WETH contract
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -58,23 +65,12 @@ contract SyncSwapRouter is ISyncSwapRouter, SyncSwapRouterInternal {
     function depositPSM(
         address asset,
         uint256 assetAmount,
-        uint deadline
-    ) external override ensureNotExpired(deadline) {
-        address _psm = psm;
-        TransferHelper.safeTransferFrom(asset, msg.sender, address(this), assetAmount);
-        IERC20(asset).approve(_psm, assetAmount);
-        ISyncPSM(_psm).deposit(asset, assetAmount);
-    }
-
-    function withdrawPSM(
-        address asset,
-        uint256 nativeAmount,
         address to,
         uint deadline
     ) external override ensureNotExpired(deadline) {
-        address _psm = psm;
-        TransferHelper.safeTransferFrom(_psm, msg.sender, address(this), nativeAmount);
-        ISyncPSM(_psm).withdraw(asset, nativeAmount, to);
+        TransferHelper.safeTransferFrom(asset, msg.sender, address(this), assetAmount);
+        IERC20(asset).approve(PSM, assetAmount);
+        ISyncPSM(PSM).deposit(asset, assetAmount, to);
     }
 
     function swapPSM(
@@ -84,28 +80,25 @@ contract SyncSwapRouter is ISyncSwapRouter, SyncSwapRouterInternal {
         address to,
         uint deadline
     ) external override ensureNotExpired(deadline) {
-        address _psm = psm;
         TransferHelper.safeTransferFrom(assetIn, msg.sender, address(this), amountIn);
-        IERC20(assetIn).approve(_psm, amountIn);
-        ISyncPSM(_psm).swap(assetIn, assetOut, amountIn, to);
+        IERC20(assetIn).approve(PSM, amountIn);
+        ISyncPSM(PSM).swap(assetIn, assetOut, amountIn, to);
     }
 
     /*//////////////////////////////////////////////////////////////
         Add Liquidity
     //////////////////////////////////////////////////////////////*/
 
-    function addLiquidity(
+    function _addLiquidity(
         address tokenA,
         address tokenB,
         uint amountAInExpected,
         uint amountBInExpected,
         uint amountAInMin,
-        uint amountBInMin,
-        address to,
-        uint deadline
-    ) external override ensureNotExpired(deadline) returns (uint amountAInActual, uint amountBInActual, uint liquidity) {
+        uint amountBInMin
+    ) internal virtual returns (address pair, uint amountAInActual, uint amountBInActual) {
         address _factory = factory;
-        address pair = SyncSwapLibrary.pairFor(_factory, tokenA, tokenB);
+        pair = SyncSwapLibrary.pairFor(_factory, tokenA, tokenB);
         if (pair == address(0)) {
             // create the pair if it doesn't exist yet
             pair = ISyncSwapFactory(_factory).createPair(tokenA, tokenB);
@@ -118,6 +111,20 @@ contract SyncSwapRouter is ISyncSwapRouter, SyncSwapRouterInternal {
                 pair, tokenA, tokenB, amountAInExpected, amountBInExpected, amountAInMin, amountBInMin
             );
         }
+    }
+
+    function addLiquidity(
+        address tokenA,
+        address tokenB,
+        uint amountAInExpected,
+        uint amountBInExpected,
+        uint amountAInMin,
+        uint amountBInMin,
+        address to,
+        uint deadline
+    ) external override ensureNotExpired(deadline) returns (uint amountAInActual, uint amountBInActual, uint liquidity) {
+        address pair;
+        (pair, amountAInActual, amountBInActual) = _addLiquidity(tokenA, tokenB, amountAInExpected, amountBInExpected, amountAInMin, amountBInMin);
 
         // transfer tokens of (optimal) input amounts to the pair
         TransferHelper.safeTransferFrom(tokenA, msg.sender, pair, amountAInActual);
@@ -125,6 +132,37 @@ contract SyncSwapRouter is ISyncSwapRouter, SyncSwapRouterInternal {
 
         // mint the liquidity tokens for sender
         liquidity = ISyncSwapPair(pair).mint(to);
+
+        // index the pair for search
+        if (!isPairIndexed[to][pair]) {
+            isPairIndexed[to][pair] = true;
+            indexedPairs[to].push(pair);
+        }
+    }
+
+    function addLiquidityETH(
+        address token,
+        uint amountTokenInExpected,
+        uint amountTokenInMin,
+        uint amountETHInMin,
+        address to,
+        uint deadline
+    ) external override payable ensureNotExpired(deadline) returns (uint amountTokenInActual, uint amountETHInActual, uint liquidity) {
+        address pair;
+        (pair, amountTokenInActual, amountETHInActual) = _addLiquidity(token, WETH, amountTokenInExpected, msg.value, amountTokenInMin, amountETHInMin);
+
+        // transfer tokens of (optimal) input amounts to the pair
+        TransferHelper.safeTransferFrom(token, msg.sender, pair, amountTokenInActual);
+        IWETH(WETH).deposit{value: amountETHInActual}();
+        assert(IWETH(WETH).transfer(pair, amountETHInActual));
+
+        // mint the liquidity tokens for sender
+        liquidity = ISyncSwapPair(pair).mint(to);
+
+        // refund dust eth, if any
+        if (msg.value > amountETHInActual) {
+            TransferHelper.safeTransferETH(msg.sender, msg.value - amountETHInActual);
+        }
 
         // index the pair for search
         if (!isPairIndexed[to][pair]) {
@@ -145,11 +183,47 @@ contract SyncSwapRouter is ISyncSwapRouter, SyncSwapRouterInternal {
         uint amountBOutMin,
         address to,
         uint deadline
-    ) external override ensureNotExpired(deadline) returns (uint amountAOut, uint amountBOut) {
+    ) public override ensureNotExpired(deadline) returns (uint amountAOut, uint amountBOut) {
         address pair = SyncSwapLibrary.pairFor(factory, tokenA, tokenB);
         (amountAOut, amountBOut) = _burnLiquidity(
             pair, tokenA, tokenB, liquidity, amountAOutMin, amountBOutMin, to
         );
+    }
+
+    function removeLiquidityETH(
+        address token,
+        uint liquidity,
+        uint amountTokenMin,
+        uint amountETHMin,
+        address to,
+        uint deadline
+    ) public override ensureNotExpired(deadline) returns (uint amountToken, uint amountETH) {
+        (amountToken, amountETH) = removeLiquidity(
+            token,
+            WETH,
+            liquidity,
+            amountTokenMin,
+            amountETHMin,
+            address(this),
+            deadline
+        );
+        TransferHelper.safeTransfer(token, to, amountToken);
+        IWETH(WETH).withdraw(amountETH);
+        TransferHelper.safeTransferETH(to, amountETH);
+    }
+
+    function _permit(
+        address tokenA,
+        address tokenB,
+        bool approveMax,
+        uint liquidity,
+        uint deadline,
+        uint8 v, bytes32 r, bytes32 s
+    ) internal returns (address) {
+        address pair = SyncSwapLibrary.pairFor(factory, tokenA, tokenB);
+        uint256 value = approveMax ? type(uint).max : liquidity;
+        ISyncSwapPair(pair).permit(msg.sender, address(this), value, deadline, v, r, s);
+        return pair;
     }
 
     function _removeLiquidityWithPermit(
@@ -163,8 +237,7 @@ contract SyncSwapRouter is ISyncSwapRouter, SyncSwapRouterInternal {
         bool approveMax,
         uint8 v, bytes32 r, bytes32 s
     ) internal returns (uint amountAOut, uint amountBOut) {
-        address pair = SyncSwapLibrary.pairFor(factory, tokenA, tokenB);
-        _permit(pair, approveMax, liquidity, deadline, v, r, s);
+        address pair = _permit(tokenA, tokenB, approveMax, liquidity, deadline, v, r, s);
 
         (amountAOut, amountBOut) = _burnLiquidity(
             pair, tokenA, tokenB, liquidity, amountAOutMin, amountBOutMin, to
@@ -179,11 +252,61 @@ contract SyncSwapRouter is ISyncSwapRouter, SyncSwapRouterInternal {
         uint amountBOutMin,
         address to,
         uint deadline,
-        bool approveMax,
-        uint8 v, bytes32 r, bytes32 s
+        bool approveMax, uint8 v, bytes32 r, bytes32 s
     ) external override returns (uint amountAOut, uint amountBOut) {
         // wrapped to avoid stack too deep errors
         (amountAOut, amountBOut) = _removeLiquidityWithPermit(tokenA, tokenB, liquidity, amountAOutMin, amountBOutMin, to, deadline, approveMax, v, r, s);
+    }
+
+    function removeLiquidityETHWithPermit(
+        address token,
+        uint liquidity,
+        uint amountTokenMin,
+        uint amountETHMin,
+        address to,
+        uint deadline,
+        bool approveMax, uint8 v, bytes32 r, bytes32 s
+    ) external override returns (uint amountToken, uint amountETH) {
+        _permit(token, WETH, approveMax, liquidity, deadline, v, r, s);
+        (amountToken, amountETH) = removeLiquidityETH(token, liquidity, amountTokenMin, amountETHMin, to, deadline);
+    }
+
+    function removeLiquidityETHSupportingFeeOnTransferTokens(
+        address token,
+        uint liquidity,
+        uint amountTokenMin,
+        uint amountETHMin,
+        address to,
+        uint deadline
+    ) public override ensureNotExpired(deadline) returns (uint amountETH) {
+        (, amountETH) = removeLiquidity(
+            token,
+            WETH,
+            liquidity,
+            amountTokenMin,
+            amountETHMin,
+            address(this),
+            deadline
+        );
+        TransferHelper.safeTransfer(token, to, IERC20(token).balanceOf(address(this)));
+        IWETH(WETH).withdraw(amountETH);
+        TransferHelper.safeTransferETH(to, amountETH);
+    }
+
+    function removeLiquidityETHWithPermitSupportingFeeOnTransferTokens(
+        address token,
+        uint liquidity,
+        uint amountTokenMin,
+        uint amountETHMin,
+        address to,
+        uint deadline,
+        bool approveMax, uint8 v, bytes32 r, bytes32 s
+    ) external override returns (uint amountETH) {
+        _permit(token, WETH, approveMax, liquidity, deadline, v, r, s);
+
+        amountETH = removeLiquidityETHSupportingFeeOnTransferTokens(
+            token, liquidity, amountTokenMin, amountETHMin, to, deadline
+        );
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -197,14 +320,54 @@ contract SyncSwapRouter is ISyncSwapRouter, SyncSwapRouterInternal {
         address to,
         uint deadline
     ) external override ensureNotExpired(deadline) returns (uint[] memory amounts) {
-        address _factory = factory;
-        amounts = SyncSwapLibrary.getAmountsOutUnchecked(_factory, amountIn, path); // will fail below if path is invalid
+        amounts = SyncSwapLibrary.getAmountsOutUnchecked(factory, amountIn, path); // will fail below if path is invalid
         // make sure the final output amount not smaller than the minimum
         require(amounts[amounts.length - 1] >= amountOutMin, 'INSUFFICIENT_OUTPUT_AMOUNT');
 
-        address initialPair = SyncSwapLibrary.pairFor(_factory, path[0], path[1]);
-        TransferHelper.safeTransferFrom(path[0], msg.sender, initialPair, amounts[0]);
-        _swapCached(_factory, initialPair, amounts, path, to);
+        address tokenIn = path[0];
+        address initialPair = SyncSwapLibrary.pairFor(factory, tokenIn, path[1]);
+        TransferHelper.safeTransferFrom(tokenIn, msg.sender, initialPair, amounts[0]);
+        _swapCached(factory, initialPair, amounts, path, to);
+    }
+
+    function swapExactETHForTokens(
+        uint amountOutMin,
+        address[] calldata path,
+        address to,
+        uint deadline
+    ) external override payable ensureNotExpired(deadline) returns (uint[] memory amounts) {
+        address tokenIn = path[0];
+        require(tokenIn == WETH, 'INVALID_PATH');
+        amounts = SyncSwapLibrary.getAmountsOutUnchecked(factory, msg.value, path);
+        require(amounts[amounts.length - 1] >= amountOutMin, 'INSUFFICIENT_OUTPUT_AMOUNT');
+
+        uint256 amountIn = amounts[0];
+        IWETH(WETH).deposit{value: amountIn}();
+
+        address initialPair = SyncSwapLibrary.pairFor(factory, tokenIn, path[1]);
+        assert(IWETH(WETH).transfer(initialPair, amountIn));
+
+        _swapCached(factory, initialPair, amounts, path, to);
+    }
+
+    function swapExactTokensForETH(
+        uint amountIn,
+        uint amountOutMin,
+        address[] calldata path,
+        address to,
+        uint deadline
+    ) external virtual override ensureNotExpired(deadline) returns (uint[] memory amounts) {
+        require(path[path.length - 1] == WETH, 'INVALID_PATH');
+        amounts = SyncSwapLibrary.getAmountsOutUnchecked(factory, amountIn, path);
+        require(amounts[amounts.length - 1] >= amountOutMin, 'INSUFFICIENT_OUTPUT_AMOUNT');
+
+        address tokenIn = path[0];
+        address initialPair = SyncSwapLibrary.pairFor(factory, tokenIn, path[1]);
+        TransferHelper.safeTransferFrom(tokenIn, msg.sender, initialPair, amounts[0]);
+        _swapCached(factory, initialPair, amounts, path, address(this));
+
+        IWETH(WETH).withdraw(amounts[amounts.length - 1]);
+        TransferHelper.safeTransferETH(to, amounts[amounts.length - 1]);
     }
 
     function swapTokensForExactTokens(
@@ -214,19 +377,96 @@ contract SyncSwapRouter is ISyncSwapRouter, SyncSwapRouterInternal {
         address to,
         uint deadline
     ) external override ensureNotExpired(deadline) returns (uint[] memory amounts) {
-        address _factory = factory;
-        amounts = SyncSwapLibrary.getAmountsInUnchecked(_factory, amountOut, path); // will fail below if path is invalid
+        amounts = SyncSwapLibrary.getAmountsInUnchecked(factory, amountOut, path); // will fail below if path is invalid
         // make sure the final input amount not bigger than the maximum
         require(amounts[0] <= amountInMax, 'EXCESSIVE_INPUT_AMOUNT');
 
-        address initialPair = SyncSwapLibrary.pairFor(_factory, path[0], path[1]);
-        TransferHelper.safeTransferFrom(path[0], msg.sender, initialPair, amounts[0]);
-        _swapCached(_factory, initialPair, amounts, path, to);
+        address tokenIn = path[0];
+        address initialPair = SyncSwapLibrary.pairFor(factory, tokenIn, path[1]);
+        TransferHelper.safeTransferFrom(tokenIn, msg.sender, initialPair, amounts[0]);
+        _swapCached(factory, initialPair, amounts, path, to);
+    }
+
+    function swapETHForExactTokens(
+        uint amountOut,
+        address[] calldata path,
+        address to,
+        uint deadline
+    ) external virtual override payable ensureNotExpired(deadline) returns (uint[] memory amounts) {
+        address tokenIn = path[0];
+        require(tokenIn == WETH, 'INVALID_PATH');
+        amounts = SyncSwapLibrary.getAmountsInUnchecked(factory, amountOut, path);
+
+        uint256 amountIn = amounts[0];
+        require(amountIn <= msg.value, 'EXCESSIVE_INPUT_AMOUNT');
+
+        IWETH(WETH).deposit{value: amountIn}();
+        address initialPair = SyncSwapLibrary.pairFor(factory, tokenIn, path[1]);
+        assert(IWETH(WETH).transfer(initialPair, amountIn));
+        _swapCached(factory, initialPair, amounts, path, to);
+
+        // refund dust eth, if any
+        if (msg.value > amountIn) {
+            TransferHelper.safeTransferETH(msg.sender, msg.value - amountIn);
+        }
+    }
+
+    function swapTokensForExactETH(
+        uint amountOut,
+        uint amountInMax,
+        address[] calldata path,
+        address to,
+        uint deadline
+    ) external virtual override ensureNotExpired(deadline) returns (uint[] memory amounts) {
+        require(path[path.length - 1] == WETH, 'INVALID_PATH');
+        amounts = SyncSwapLibrary.getAmountsInUnchecked(factory, amountOut, path);
+
+        uint256 amountIn = amounts[0];
+        require(amountIn <= amountInMax, 'EXCESSIVE_INPUT_AMOUNT');
+
+        address tokenIn = path[0];
+        address initialPair = SyncSwapLibrary.pairFor(factory, tokenIn, path[1]);
+        TransferHelper.safeTransferFrom(tokenIn, msg.sender, initialPair, amountIn);
+        _swapCached(factory, initialPair, amounts, path, address(this));
+
+        uint256 _amountOut = amounts[amounts.length - 1];
+        IWETH(WETH).withdraw(_amountOut);
+        TransferHelper.safeTransferETH(to, _amountOut);
     }
 
     /*//////////////////////////////////////////////////////////////
         Swap (fee-on-transfer)
     //////////////////////////////////////////////////////////////*/
+
+    // requires the initial amount to have already been sent to the first pair
+    function _swapSupportingFeeOnTransferTokens(address initialPair, address[] calldata path, address _to) internal virtual {
+        for (uint i; i < path.length - 1; ) {
+            (address input, address output) = (path[i], path[i + 1]);
+            
+            ISyncSwapPair pair = ISyncSwapPair(i == 0 ? initialPair : SyncSwapLibrary.pairFor(factory, input, output));
+            uint amountInput;
+            uint amountOutput;
+
+            { // scope to avoid stack too deep errors
+                (uint reserve0, uint reserve1, uint16 swapFee) = pair.getReservesAndParameters();
+                (uint reserveIn, uint reserveOut) = input < output ? (reserve0, reserve1) : (reserve1, reserve0);
+                amountInput = IERC20(input).balanceOf(address(pair)) - reserveIn;
+                amountOutput = SyncSwapLibrary.getAmountOut(amountInput, reserveIn, reserveOut, swapFee);
+            }
+
+            address to = i < path.length - 2 ? SyncSwapLibrary.pairFor(factory, output, path[i + 2]) : _to;
+
+            if (input < output) { // whether input token is `token0`
+                pair.swapFor1(amountOutput, to);
+            } else {
+                pair.swapFor0(amountOutput, to);
+            }
+
+            unchecked {
+                ++i;
+            }
+        }
+    }
 
     function swapExactTokensForTokensSupportingFeeOnTransferTokens(
         uint amountIn,
@@ -235,17 +475,67 @@ contract SyncSwapRouter is ISyncSwapRouter, SyncSwapRouterInternal {
         address to,
         uint deadline
     ) external override ensureNotExpired(deadline) {
-        address _factory = factory;
+        address tokenIn = path[0];
+        address initialPair = SyncSwapLibrary.pairFor(factory, tokenIn, path[1]);
         TransferHelper.safeTransferFrom(
-            path[0], msg.sender, SyncSwapLibrary.pairFor(_factory, path[0], path[1]), amountIn
+            tokenIn, msg.sender, initialPair, amountIn
         );
-        address outputToken = path[path.length - 1];
-        uint balanceBefore = IERC20(outputToken).balanceOf(to);
-        _swapSupportingFeeOnTransferTokens(_factory, path, to);
+
+        address tokenOut = path[path.length - 1];
+        uint balanceBefore = IERC20(tokenOut).balanceOf(to);
+        _swapSupportingFeeOnTransferTokens(initialPair, path, to);
+
         require(
-            IERC20(outputToken).balanceOf(to) - balanceBefore >= amountOutMin,
+            IERC20(tokenOut).balanceOf(to) - balanceBefore >= amountOutMin,
             'INSUFFICIENT_OUTPUT_AMOUNT'
         );
+    }
+
+    function swapExactETHForTokensSupportingFeeOnTransferTokens(
+        uint amountOutMin,
+        address[] calldata path,
+        address to,
+        uint deadline
+    ) external override payable ensureNotExpired(deadline) {
+        address tokenIn = path[0];
+        require(tokenIn == WETH, 'INVALID_PATH');
+
+        uint amountIn = msg.value;
+        IWETH(WETH).deposit{value: amountIn}();
+        address initialPair = SyncSwapLibrary.pairFor(factory, tokenIn, path[1]);
+        assert(IWETH(WETH).transfer(initialPair, amountIn));
+
+        address tokenOut = path[path.length - 1];
+        uint balanceBefore = IERC20(tokenOut).balanceOf(to);
+        _swapSupportingFeeOnTransferTokens(initialPair, path, to);
+
+        require(
+            IERC20(tokenOut).balanceOf(to) - balanceBefore >= amountOutMin,
+            'INSUFFICIENT_OUTPUT_AMOUNT'
+        );
+    }
+
+    function swapExactTokensForETHSupportingFeeOnTransferTokens(
+        uint amountIn,
+        uint amountOutMin,
+        address[] calldata path,
+        address to,
+        uint deadline
+    ) external override ensureNotExpired(deadline) {
+        require(path[path.length - 1] == WETH, 'INVALID_PATH');
+
+        address tokenIn = path[0];
+        address initialPair = SyncSwapLibrary.pairFor(factory, tokenIn, path[1]);
+        TransferHelper.safeTransferFrom(
+            tokenIn, msg.sender, initialPair, amountIn
+        );
+        _swapSupportingFeeOnTransferTokens(initialPair, path, address(this));
+
+        uint amountOut = IERC20(WETH).balanceOf(address(this));
+        require(amountOut >= amountOutMin, 'INSUFFICIENT_OUTPUT_AMOUNT');
+
+        IWETH(WETH).withdraw(amountOut);
+        TransferHelper.safeTransferETH(to, amountOut);
     }
 
     /*//////////////////////////////////////////////////////////////
