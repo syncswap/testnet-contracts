@@ -61,6 +61,7 @@ contract SyncSwapDutchAuction is ReentrancyGuard, Ownable {
         uint256 _endPricePerShare,
         uint256 _saleAmountPerShare
     ) {
+        require(_tokenForSale != _tokenBid, "Identical tokens");
         require(IERC20(_tokenForSale).balanceOf(address(this)) != type(uint256).max, "Invalid sale token"); // sanity check
         tokenForSale = _tokenForSale;
         
@@ -205,7 +206,7 @@ contract SyncSwapDutchAuction is ReentrancyGuard, Ownable {
         return startPricePerShare - _priceReduced;
     }
 
-    function getPrice(uint256 _amountToBuy) external view returns (uint256) {
+    function getPrice(uint256 _amountToBuy) public view returns (uint256) {
         return _amountToBuy * (currentPricePerShare() * 1e18 / saleAmountPerShare) / 1e18;
     }
 
@@ -213,7 +214,7 @@ contract SyncSwapDutchAuction is ReentrancyGuard, Ownable {
         return _amountBid * saleAmountPerShare / currentPricePerShare();
     }
 
-    function newBid(uint256 _amountBid) external nonReentrant {
+    function newBid(uint256 _amountBid, bool allowPartialFill) external nonReentrant {
         require(_amountBid >= amountMinBid, "Invalid amount");
 
         // Requires auction has started.
@@ -226,7 +227,17 @@ contract SyncSwapDutchAuction is ReentrancyGuard, Ownable {
         require(_amountToBuy > 0, "Amount to buy is too small");
 
         // Requires has enough sale tokens available.
-        require(totalAmountSold + _amountToBuy <= totalAmountForSale, "Exceeds total sale amount");
+        uint256 _leftover = totalAmountForSale - totalAmountSold;
+        if (_leftover < _amountToBuy) {
+            // Partially fills if possible.
+            if (allowPartialFill) {
+                require(_leftover > 0, "All tokens sold");
+                _amountToBuy = _leftover;
+                _amountBid = getPrice(_leftover);
+            } else {
+                revert("No enough tokens to fill");
+            }
+        }
 
         IERC20(tokenBid).safeTransferFrom(msg.sender, address(this), _amountBid);
         totalAmountBidPlaced += _amountBid;
@@ -236,7 +247,7 @@ contract SyncSwapDutchAuction is ReentrancyGuard, Ownable {
         user.totalAmountBid += _amountBid;
         user.totalAmountSale += _amountToBuy;
         ++user.bidAmount;
-        
+
         userBids[msg.sender].push(Bid({
             amountBid: _amountBid,
             amountSale: _amountToBuy
@@ -259,7 +270,7 @@ contract SyncSwapDutchAuction is ReentrancyGuard, Ownable {
     function claim() external nonReentrant {
         require(canClaim(), "Cannot claim");
         require(isClaimOpened, "Claim not open");
-        
+
         UserInfo memory _user = userInfo[msg.sender];
         require(!_user.isClaimed, "Already claimed");
         require(_user.totalAmountSale > 0, "No token to claim");
