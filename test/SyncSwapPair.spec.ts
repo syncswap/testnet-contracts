@@ -95,7 +95,7 @@ describe('SyncSwapPair', () => {
             await addLiquidity(token0Amount, token1Amount);
             await token0.transfer(pair.address, swapAmount);
             await expect(pair.swap(0, expectedOutputAmount.add(1), accounts[0].address, '0x')).to.be.revertedWith(
-                'K_VIOLATION'
+                'K'
             );
             await pair.swap(0, expectedOutputAmount, accounts[0].address, '0x');
         });
@@ -109,7 +109,7 @@ describe('SyncSwapPair', () => {
             await addLiquidity(token0Amount, token1Amount);
             await token0.transfer(pair.address, swapAmount);
             await expect(pair.swapFor1(expectedOutputAmount.add(1), accounts[0].address)).to.be.revertedWith(
-                'K_VIOLATION'
+                'K'
             );
             await pair.swapFor1(expectedOutputAmount, accounts[0].address);
         });
@@ -140,7 +140,7 @@ describe('SyncSwapPair', () => {
             await addLiquidity(token0Amount, token1Amount);
             await token0.transfer(pair.address, swapAmount);
             await expect(pair.swap(0, expectedOutputAmount.add(1), accounts[0].address, '0x')).to.be.revertedWith(
-                'K_VIOLATION'
+                'K'
             );
             await pair.swap(0, expectedOutputAmount, accounts[0].address, '0x');
         });
@@ -157,7 +157,7 @@ describe('SyncSwapPair', () => {
             await addLiquidity(token0Amount, token1Amount);
             await token0.transfer(pair.address, swapAmount);
             await expect(pair.swapFor1(expectedOutputAmount.add(1), accounts[0].address)).to.be.revertedWith(
-                'K_VIOLATION'
+                'K'
             );
             await pair.swapFor1(expectedOutputAmount, accounts[0].address);
         });
@@ -180,7 +180,7 @@ describe('SyncSwapPair', () => {
             await addLiquidity(token0Amount, token1Amount);
             await token0.transfer(pair.address, inputAmount);
             await expect(pair.swap(outputAmount.add(1), 0, accounts[0].address, '0x')).to.be.revertedWith(
-                'K_VIOLATION'
+                'K'
             );
             await pair.swap(outputAmount, 0, accounts[0].address, '0x');
         });
@@ -360,7 +360,7 @@ describe('SyncSwapPair', () => {
 
         const tx = await pair.swapFor0(expectedOutputAmount, accounts[0].address);
         const receipt = await tx.wait()
-        expect(receipt.gasUsed).to.eq(82065)
+        expect(receipt.gasUsed).to.eq(82051)
     });
 
     it('burn', async () => {

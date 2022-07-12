@@ -1,4 +1,3 @@
-import { Account } from 'ethereumjs-util';
 import { BigNumber, Contract } from 'ethers';
 import {
     defaultAbiCoder,
@@ -6,32 +5,9 @@ import {
     solidityPack,
     toUtf8Bytes
 } from 'ethers/lib/utils';
-import { Provider, Web3Provider } from 'zksync-web3';
 import { Constants } from './constants';
 
 const hre = require("hardhat");
-
-//import { abi as SyncSwapPairABI } from '../artifacts/contracts/protocol/core/SyncSwapPair.sol/SyncSwapPair.json';
-
-/*
-export abstract class Env {
-    public static wallet: Wallet;
-    public static feeToken: string;
-    private static _initialized = false;
-
-    public static initialize() {
-        if (this._initialized) {
-            return;
-        }
-
-        const testMnemonic = 'stuff slice staff easily soup parent arm payment cotton trade scatter struggle';
-        this.wallet = Wallet.fromMnemonic(testMnemonic, "m/44'/60'/0'/0/0");
-
-        this.feeToken = ETH;
-        console.log(`Env initialized using account ${this.wallet.address}.`);
-    }
-}
-*/
 
 export function expandTo18Decimals(n: number): BigNumber {
     return BigNumber.from(n).mul(BigNumber.from(10).pow(18));

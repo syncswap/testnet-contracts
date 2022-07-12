@@ -86,7 +86,7 @@ abstract contract SyncSwapRouterInternal {
                 uint amountAInOptimal = _quote(amountBInExpected, reserveB, reserveA);
                 // always true as price of B are the same or can only
                 // decreasing (price of A have increased) in above checking
-                assert(amountAInOptimal <= amountAInExpected);
+                //assert(amountAInOptimal <= amountAInExpected);
 
                 // may found a better (smaller) A amount, compare with the minimum
                 // this could happend if trading price of A have increased
@@ -136,12 +136,6 @@ abstract contract SyncSwapRouterInternal {
         require(amountBOut >= amountBOutMin, 'INSUFFICIENT_B_AMOUNT');
     }
 
-    function _permit(address pair, bool approveMax, uint liquidity, uint deadline, uint8 v, bytes32 r, bytes32 s) internal {
-        // approve liquidity pairs with signatures
-        uint value = approveMax ? type(uint).max : liquidity;
-        ISyncSwapPair(pair).permit(msg.sender, address(this), value, deadline, v, r, s);
-    }
-
     /*//////////////////////////////////////////////////////////////
         Swap
     //////////////////////////////////////////////////////////////*/
@@ -174,7 +168,7 @@ abstract contract SyncSwapRouterInternal {
         // cache next pair, this can save `path.length - 1` storage accessing pair addresses.
         address nextPair = initialPair;
 
-        for (uint i; i < path.length - 1; i++) {
+        for (uint i; i < path.length - 1; ) {
             (address input, address output) = (path[i], path[i + 1]);
             uint amountOut = amounts[i + 1]; // output amount of current sub swap.
 
@@ -196,6 +190,10 @@ abstract contract SyncSwapRouterInternal {
                 // last sub swap with `to` or its caller function.
                 _swapSingle(nextPair, amountOut, input, output, to);
             }
+
+            unchecked {
+                ++i;
+            }
         }
     }
 
@@ -204,40 +202,6 @@ abstract contract SyncSwapRouterInternal {
             ISyncSwapPair(pair).swapFor1(amountOut, to);
         } else {
             ISyncSwapPair(pair).swapFor0(amountOut, to);
-        }
-    }
-
-    /*//////////////////////////////////////////////////////////////
-        Swap (fee-on-transfer)
-    //////////////////////////////////////////////////////////////*/
-
-    // requires the initial amount to have already been sent to the first pair
-    function _swapSupportingFeeOnTransferTokens(address _factory, address[] calldata path, address _to) internal virtual {
-        for (uint i; i < path.length - 1; ) {
-            (address input, address output) = (path[i], path[i + 1]);
-            
-            ISyncSwapPair pair = ISyncSwapPair(SyncSwapLibrary.pairFor(_factory, input, output));
-            uint amountInput;
-            uint amountOutput;
-
-            { // scope to avoid stack too deep errors
-                (uint reserve0, uint reserve1, uint16 swapFee) = pair.getReservesAndParameters();
-                (uint reserveIn, uint reserveOut) = input < output ? (reserve0, reserve1) : (reserve1, reserve0);
-                amountInput = IERC20(input).balanceOf(address(pair)) - reserveIn;
-                amountOutput = SyncSwapLibrary.getAmountOut(amountInput, reserveIn, reserveOut, swapFee);
-            }
-
-            address to = i < path.length - 2 ? SyncSwapLibrary.pairFor(_factory, output, path[i + 2]) : _to;
-
-            if (input < output) { // whether input token is `token0`
-                pair.swapFor1(amountOutput, to);
-            } else {
-                pair.swapFor0(amountOutput, to);
-            }
-
-            unchecked {
-                ++i;
-            }
         }
     }
 }

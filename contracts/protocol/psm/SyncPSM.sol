@@ -95,9 +95,9 @@ contract SyncPSM is ISyncPSM, ERC20WithPermit, Ownable, ReentrancyGuard {
      */
     address public verifier = address(0);
 
-    event Deposit(address indexed sender, address indexed asset, uint256 assetAmount);
-    event Withdraw(address indexed sender, address indexed asset, uint256 nativeAmount, uint256 amountOut);
-    event Swap(address indexed sender, address indexed assetIn, address assetOut, uint256 amountIn, uint256 amountOut);
+    event Deposit(address indexed sender, address indexed asset, uint256 assetAmount, address to);
+    event Withdraw(address indexed sender, address indexed asset, uint256 nativeAmount, uint256 amountOut, address to);
+    event Swap(address indexed sender, address indexed assetIn, address assetOut, uint256 amountIn, uint256 amountOut, address to);
 
     constructor() ERC20WithPermit() Ownable() {
         _initializeMetadata("Sync USD", "USDs");
@@ -502,7 +502,7 @@ contract SyncPSM is ISyncPSM, ERC20WithPermit, Ownable, ReentrancyGuard {
     /**
      * @dev Deposits given asset and amount for on behalf of a recipient.
      */
-    function deposit(address asset, uint256 assetAmount) external override nonReentrant {
+    function deposit(address asset, uint256 assetAmount, address to) external override nonReentrant {
         // 1. Check: Input: Check input amount
         require(assetAmount != 0, "Amount must greater than zero");
 
@@ -527,16 +527,16 @@ contract SyncPSM is ISyncPSM, ERC20WithPermit, Ownable, ReentrancyGuard {
         unchecked {
             assetInfo[asset].reserve += assetAmount;
         }
-        userSupplies[msg.sender][asset] += assetAmount;
+        userSupplies[to][asset] += assetAmount;
 
         // 3-2. Convert amount and mint native asset
         uint256 _nativeAmount = _toNativeAmount(asset, assetAmount);
-        _mint(msg.sender, _nativeAmount);
+        _mint(to, _nativeAmount);
 
         // ------------------------------
 
         // 4. Emit deposit event
-        emit Deposit(msg.sender, asset, assetAmount);
+        emit Deposit(msg.sender, asset, assetAmount, to);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -575,7 +575,7 @@ contract SyncPSM is ISyncPSM, ERC20WithPermit, Ownable, ReentrancyGuard {
         }
     }
 
-    function _withdrawAsset(address _assetOut, uint256 _amountOutDesired, bool _isSwap) internal returns (uint256 _amountOutAfterFee) {
+    function _withdrawAsset(address _assetOut, uint256 _amountOutDesired, address _to, bool _isSwap) internal returns (uint256 _amountOutAfterFee) {
         // Decreases reserve.
         assetInfo[_assetOut].reserve -= _amountOutDesired;
 
@@ -589,13 +589,13 @@ contract SyncPSM is ISyncPSM, ERC20WithPermit, Ownable, ReentrancyGuard {
 
         // Transfers output asset.
         require(_amountOutAfterFee != 0, "INSUFFICIENT_INPUT");
-        TransferHelper.safeTransfer(_assetOut, msg.sender, _amountOutAfterFee);
+        TransferHelper.safeTransfer(_assetOut, _to, _amountOutAfterFee);
     }
 
     /**
      * @dev Withdraws given amount and asset.
      */
-    function withdraw(address asset, uint256 nativeAmount) external override nonReentrant returns (uint256 amountOut) {
+    function withdraw(address asset, uint256 nativeAmount, address to) external override nonReentrant returns (uint256 amountOut) {
         // 1. Check: Input: Check input amount
         require(nativeAmount != 0, "Amount must greater than zero");
 
@@ -608,12 +608,12 @@ contract SyncPSM is ISyncPSM, ERC20WithPermit, Ownable, ReentrancyGuard {
         amountOut = _toAssetAmount(asset, nativeAmount);
 
         // 2-3. Withdraw output asset
-        amountOut = _withdrawAsset(asset, amountOut, false);
+        amountOut = _withdrawAsset(asset, amountOut, to, false);
 
         ////////////////////////////////////////////////////////////////
 
         // 3. Emit withdraw event
-        emit Withdraw(msg.sender, asset, nativeAmount, amountOut);
+        emit Withdraw(msg.sender, asset, nativeAmount, amountOut, to);
     }
 
     function emergencyWithdraw(address asset, uint256 nativeAmount) external nonReentrant returns (uint256 amountOut) {
@@ -630,7 +630,7 @@ contract SyncPSM is ISyncPSM, ERC20WithPermit, Ownable, ReentrancyGuard {
 
         TransferHelper.safeTransfer(asset, msg.sender, amountOut);
 
-        emit Withdraw(msg.sender, asset, nativeAmount, amountOut);
+        emit Withdraw(msg.sender, asset, nativeAmount, amountOut, msg.sender);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -645,7 +645,7 @@ contract SyncPSM is ISyncPSM, ERC20WithPermit, Ownable, ReentrancyGuard {
     /**
      * @dev Swaps from input asset in given amount to the output asset.
      */
-    function swap(address assetIn, address assetOut, uint256 amountIn) external override nonReentrant returns (uint256 amountOut) {
+    function swap(address assetIn, address assetOut, uint256 amountIn, address to) external override nonReentrant returns (uint256 amountOut) {
         // 1-1. Check: Input: Check asset addresses
         require(assetIn != assetOut, "Identical assets");
         
@@ -680,11 +680,11 @@ contract SyncPSM is ISyncPSM, ERC20WithPermit, Ownable, ReentrancyGuard {
         amountOut = _toOutputAmount(assetIn, assetOut, amountIn);
 
         // 4-2. Withdraw output asset
-        amountOut = _withdrawAsset(assetOut, amountOut, true);
+        amountOut = _withdrawAsset(assetOut, amountOut, to, true);
 
         ////////////////////////////////////////////////////////////////
 
         // 5. Emit swap event
-        emit Swap(msg.sender, assetIn, assetOut, amountIn, amountOut);
+        emit Swap(msg.sender, assetIn, assetOut, amountIn, amountOut, to);
     }
 }
